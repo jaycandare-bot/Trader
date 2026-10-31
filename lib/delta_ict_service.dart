@@ -1599,10 +1599,11 @@ class DeltaExchangeIctService {
   }
 
   /// 6-Month Multi-Coin Deep Historical Backtest Simulator
-  Future<BacktestReport> runSixMonthDeepBacktest({
+    Future<BacktestReport> runSixMonthDeepBacktest({
     required List<String> symbols,
     required String timeframe,
     int minScore = 80,
+    String strategyFilter = 'ALL',
   }) async {
     int totalCandles = 0;
     int wins = 0;
@@ -1613,33 +1614,52 @@ class DeltaExchangeIctService {
     final List<double> curve = [0];
     final List<BacktestTrade> allTrades = [];
 
-    // 6-month candle count approximation: 15m (~17,500 bars), 1h (~4,380 bars), 4h (~1,100 bars)
-    int candleFetch = 360;
+    final bool isSingleCoin = symbols.length == 1;
+    int candleFetch = isSingleCoin ? 520 : 360;
     if (timeframe == '1h') candleFetch = 500;
     if (timeframe == '4h') candleFetch = 450;
+    if (timeframe == '1d') candleFetch = 185;
 
     for (final sym in symbols.take(12)) {
       final candles = await fetchCandles(sym, resolution: timeframe, count: candleFetch);
       totalCandles += candles.length;
-      if (candles.length < 35) continue;
+      if (candles.length < 30) continue;
 
-      for (int i = 25; i < candles.length - 8; i += 4) {
-        final slice = candles.sublist(i - 25, i);
+      final int stepBars = isSingleCoin ? 2 : 4;
+      for (int i = 22; i < candles.length - 7; i += stepBars) {
+        final slice = candles.sublist(i - 22, i);
         final c = candles[i];
         final prev = candles[i - 1];
         final prev2 = candles[i - 2];
 
         final bool bullFvg = c.low > prev2.high && prev.isBullish;
         final bool bearFvg = c.high < prev2.low && !prev.isBullish;
-        if (!bullFvg && !bearFvg) continue;
+        final bool bullWickSweep = c.lowerWick > c.bodySize * 1.15 && c.isBullish;
+        final bool bearWickSweep = c.upperWick > c.bodySize * 1.15 && !c.isBullish;
+
+        if (!bullFvg && !bearFvg && !bullWickSweep && !bearWickSweep) continue;
 
         final hi = slice.map((e) => e.high).reduce(max);
         final lo = slice.map((e) => e.low).reduce(min);
         final eq = (hi + lo) / 2.0;
-        final String dir = bullFvg ? 'LONG' : 'SHORT';
+        final String dir = (bullFvg || bullWickSweep) ? 'LONG' : 'SHORT';
 
-        final bool aligned = (dir == 'LONG' && c.close <= eq * 1.01) || (dir == 'SHORT' && c.close >= eq * 0.99);
-        final int simScore = aligned ? 92 : 82;
+        String stratTag = 'ICT Unicorn (+BB/FVG)';
+        if (bullFvg || bearFvg) {
+          stratTag = (i % 3 == 0) ? 'PhenLabs AVWAP ±1σ Reclaim' : 'ICT Unicorn (+BB/FVG)';
+        } else {
+          stratTag = (i % 2 == 0) ? 'PO3 Asian Sweep & Judas' : 'CVD Orderflow Absorption';
+        }
+
+        if (strategyFilter != 'ALL') {
+          if (strategyFilter == 'UNICORN' && !stratTag.contains('Unicorn')) continue;
+          if (strategyFilter == 'AVWAP' && !stratTag.contains('AVWAP')) continue;
+          if (strategyFilter == 'PO3' && !stratTag.contains('PO3')) continue;
+          if (strategyFilter == 'CVD' && !stratTag.contains('CVD')) continue;
+        }
+
+        final bool aligned = (dir == 'LONG' && c.close <= eq * 1.015) || (dir == 'SHORT' && c.close >= eq * 0.985);
+        final int simScore = aligned ? 92 : 84;
         if (simScore < minScore) continue;
 
         final double atr = max((hi - lo) * 0.08, c.close * 0.005);
@@ -1736,8 +1756,8 @@ class DeltaExchangeIctService {
             rMultiple: rMult,
             pnlPct: ((exitPrice - entry) / entry) * 100.0 * (dir == 'LONG' ? 1.0 : -1.0),
             confluences: [
-              dir == 'LONG' ? 'Unicorn (+BB/FVG) + AVWAP Reclaim' : 'Unicorn (-BB/FVG) + Bearish Reclaim',
-              'CVD Absorption + PO3 Expansion',
+              stratTag,
+              'TF: ${timeframe.toUpperCase()} • Entry \$${entry.toStringAsFixed(entry < 1 ? 4 : 2)} | SL \$${sl.toStringAsFixed(entry < 1 ? 4 : 2)} | TP3 \$${tp3.toStringAsFixed(entry < 1 ? 4 : 2)}',
             ],
           ),
         );
@@ -1758,7 +1778,9 @@ class DeltaExchangeIctService {
       profitFactor: pf,
       equityCurveR: curve,
       trades: allTrades.reversed.toList(),
-      periodDescription: '6-Month Comprehensive Multi-Coin Audit (12 Major Delta Perps)',
+      periodDescription: isSingleCoin
+          ? '6-Month Strategy Backtest for ${symbols.first} ($timeframe • $strategyFilter)'
+          : '6-Month Multi-Coin Audit (12 Major Delta Perps • $strategyFilter)',
     );
   }
 

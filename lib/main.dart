@@ -16,7 +16,7 @@ class DeltaIctTerminalV9App extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Delta ICT Terminal v16',
+      title: 'Delta ICT Terminal v17',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color(0xFF090D14),
@@ -840,10 +840,20 @@ class Tab3ManualMultiCoinInspector extends StatefulWidget {
 }
 
 class _Tab3ManualMultiCoinInspectorState extends State<Tab3ManualMultiCoinInspector> {
+  static const List<String> _allTimeframes = ['5m', '15m', '1h', '4h', '1d'];
   final List<String> _inspectedSymbols = ['BTCUSD', 'ETHUSD'];
-  final Map<String, IctSignal> _loadedSignals = {};
+
+  // symbol -> timeframe -> IctSignal
+  final Map<String, Map<String, IctSignal>> _multiTfSignals = {};
+  // symbol -> currently selected timeframe on that coin's card
+  final Map<String, String> _coinSelectedTf = {};
+  // symbol -> latest inline backtest report for that coin
+  final Map<String, BacktestReport> _coinBacktests = {};
+  final Map<String, String> _coinStrategyFilter = {};
+  final Map<String, bool> _coinBtRunning = {};
+
   bool _loading = false;
-  String _selectedTf = '15m';
+  String _globalTf = '15m';
 
   @override
   void initState() {
@@ -854,37 +864,78 @@ class _Tab3ManualMultiCoinInspectorState extends State<Tab3ManualMultiCoinInspec
   Future<void> _loadAllSymbols() async {
     setState(() => _loading = true);
     for (final sym in _inspectedSymbols) {
-      await _loadSingleSymbol(sym);
+      _coinSelectedTf.putIfAbsent(sym, () => _globalTf);
+      _coinStrategyFilter.putIfAbsent(sym, () => 'ALL');
+      await _loadAllTimeframesForSymbol(sym);
+      await _runSingleCoinBacktest(sym);
     }
     if (mounted) setState(() => _loading = false);
   }
 
-  Future<void> _loadSingleSymbol(String sym) async {
+  Future<void> _loadAllTimeframesForSymbol(String sym) async {
     try {
-      final candlesLtf = await widget.service.fetchCandles(sym, resolution: _selectedTf, count: 90);
-      final candles1h = await widget.service.fetchCandles(sym, resolution: '1h', count: 45);
-      final candles4h = await widget.service.fetchCandles(sym, resolution: '4h', count: 35);
-      final btcCandles = await widget.service.fetchCandles('BTCUSD', resolution: _selectedTf, count: 60);
-      final macro = widget.macro ?? await widget.service.fetchMacroRegime(btcCandles: btcCandles, resolution: _selectedTf);
+      final candles1h = await widget.service.fetchCandles(sym, resolution: '1h', count: 55);
+      final candles4h = await widget.service.fetchCandles(sym, resolution: '4h', count: 45);
+      final btcCandles = await widget.service.fetchCandles('BTCUSD', resolution: '15m', count: 60);
+      final macro = widget.macro ?? await widget.service.fetchMacroRegime(btcCandles: btcCandles, resolution: '15m');
 
-      final mark = candlesLtf.isNotEmpty ? candlesLtf.last.close : 0.0;
-      final sig = widget.service.evaluateIctConfluence(
-        symbol: sym,
-        productId: 1,
-        markPrice: mark,
-        fundingRate: 0.01,
-        openInterest: 25000,
-        candles: candlesLtf,
-        htfCandles: candles1h,
-        htf4hCandles: candles4h,
-        btcCandles: btcCandles,
-        macro: macro,
-        timeframe: _selectedTf,
-      );
-      if (sig != null) {
-        _loadedSignals[sym] = sig;
+      final Map<String, IctSignal> tfMap = {};
+      for (final tf in _allTimeframes) {
+        final candlesTf = (tf == '1h' && candles1h.isNotEmpty)
+            ? candles1h
+            : ((tf == '4h' && candles4h.isNotEmpty)
+                ? candles4h
+                : await widget.service.fetchCandles(sym, resolution: tf, count: 85));
+
+        if (candlesTf.isEmpty) continue;
+        final mark = candlesTf.last.close;
+        final sig = widget.service.evaluateIctConfluence(
+          symbol: sym,
+          productId: 1,
+          markPrice: mark,
+          fundingRate: 0.008,
+          openInterest: 25000,
+          candles: candlesTf,
+          htfCandles: candles1h,
+          htf4hCandles: candles4h,
+          btcCandles: btcCandles,
+          macro: macro,
+          timeframe: tf,
+        );
+        if (sig != null) {
+          tfMap[tf] = sig;
+        }
+      }
+      if (tfMap.isNotEmpty) {
+        _multiTfSignals[sym] = tfMap;
       }
     } catch (_) {}
+  }
+
+  Future<void> _runSingleCoinBacktest(String sym) async {
+    final tf = _coinSelectedTf[sym] ?? _globalTf;
+    final strat = _coinStrategyFilter[sym] ?? 'ALL';
+    if (mounted) {
+      setState(() => _coinBtRunning[sym] = true);
+    }
+    try {
+      final rep = await widget.service.runSixMonthDeepBacktest(
+        symbols: [sym],
+        timeframe: tf,
+        minScore: 78,
+        strategyFilter: strat,
+      );
+      if (mounted) {
+        setState(() {
+          _coinBacktests[sym] = rep;
+          _coinBtRunning[sym] = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _coinBtRunning[sym] = false);
+      }
+    }
   }
 
   void _openAddCoinModal() {
@@ -905,13 +956,13 @@ class _Tab3ManualMultiCoinInspectorState extends State<Tab3ManualMultiCoinInspec
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Add Coin to Inspector Comparison', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  const Text('Add Coin to Manual Inspector & All-TF Scanner', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 10),
                   TextField(
                     autofocus: true,
                     decoration: const InputDecoration(
                       prefixIcon: Icon(Icons.search),
-                      hintText: 'Search coin (e.g. SOLUSD, XRPUSD, AKEUSD)...',
+                      hintText: 'Search coin (e.g. SOLUSD, XRPUSD, SUIUSD, AKEUSD)...',
                       border: OutlineInputBorder(),
                     ),
                     onChanged: (v) => setModalState(() => query = v),
@@ -926,16 +977,20 @@ class _Tab3ManualMultiCoinInspectorState extends State<Tab3ManualMultiCoinInspec
                         final price = p['mark_price'] as double;
                         return ListTile(
                           title: Text('$sym • \$${price.toStringAsFixed(price < 1 ? 4 : 2)}'),
+                          subtitle: const Text('Loads 5m, 15m, 1h, 4h, 1d Entry/SL/TPs + 6M Backtest', style: TextStyle(fontSize: 10, color: Colors.white54)),
                           trailing: const Icon(Icons.add_circle_outline, color: Color(0xFF00E676)),
                           onTap: () async {
                             Navigator.pop(ctx);
                             if (!_inspectedSymbols.contains(sym)) {
                               setState(() {
-                                _inspectedSymbols.add(sym);
+                                _inspectedSymbols.insert(0, sym);
+                                _coinSelectedTf[sym] = _globalTf;
+                                _coinStrategyFilter[sym] = 'ALL';
                                 _loading = true;
                               });
-                              await _loadSingleSymbol(sym);
-                              setState(() => _loading = false);
+                              await _loadAllTimeframesForSymbol(sym);
+                              await _runSingleCoinBacktest(sym);
+                              if (mounted) setState(() => _loading = false);
                             }
                           },
                         );
@@ -951,68 +1006,537 @@ class _Tab3ManualMultiCoinInspectorState extends State<Tab3ManualMultiCoinInspec
     );
   }
 
+  void _openCoinBacktestFullModal(String sym, String initialTf, String initialStrat) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF0B0E14),
+      builder: (ctx) => _SixMonthBacktestSheet(
+        service: widget.service,
+        singleSymbol: sym,
+        initialTimeframe: initialTf,
+        initialStrategy: initialStrat,
+      ),
+    );
+  }
+
+  Widget _copyPricePill(String label, double val, int dec, Color color) {
+    return InkWell(
+      onTap: () {
+        Clipboard.setData(ClipboardData(text: val.toStringAsFixed(dec)));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Copied $label: ${val.toStringAsFixed(dec)}'), duration: const Duration(milliseconds: 500)),
+        );
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        decoration: BoxDecoration(
+          color: const Color(0xFF172030),
+          borderRadius: BorderRadius.circular(5),
+          border: Border.all(color: color.withOpacity(0.35)),
+        ),
+        child: Column(
+          children: [
+            Text(label, style: const TextStyle(fontSize: 8.5, color: Colors.white54, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 1),
+            Text(val.toStringAsFixed(dec), style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: color)),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListView(
       padding: const EdgeInsets.all(10),
       children: [
+        // Top Header + Add Coin Button
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text('Manual Multi-Coin Inspector (${_inspectedSymbols.length} Active)', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Manual Coin Inspector (${_inspectedSymbols.length} Coins)', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+                  const Text('All-Timeframe Entry/SL/TPs + Per-Coin Strategy Backtest', style: TextStyle(fontSize: 10, color: Colors.white60)),
+                ],
+              ),
+            ),
+            IconButton(
+              tooltip: 'Rescan All Coins',
+              icon: const Icon(Icons.refresh, color: Colors.cyanAccent, size: 20),
+              onPressed: _loadAllSymbols,
+            ),
             ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00E676), foregroundColor: Colors.black),
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00E676), foregroundColor: Colors.black, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
               icon: const Icon(Icons.add, size: 16),
-              label: const Text('Add Coin', style: TextStyle(fontWeight: FontWeight.bold)),
+              label: const Text('Add Coin', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
               onPressed: _openAddCoinModal,
             ),
           ],
         ),
+        const SizedBox(height: 8),
+
+        // Global Timeframe Switcher Bar (Applies to all inspected coins at once)
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: const Color(0xFF111826),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.white12),
+          ),
+          child: Row(
+            children: [
+              const Text('GLOBAL TF: ', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.amberAccent)),
+              const SizedBox(width: 4),
+              Expanded(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: _allTimeframes.map((tf) {
+                      final active = _globalTf == tf;
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: InkWell(
+                          onTap: () {
+                            setState(() {
+                              _globalTf = tf;
+                              for (final sym in _inspectedSymbols) {
+                                _coinSelectedTf[sym] = tf;
+                              }
+                            });
+                            for (final sym in _inspectedSymbols) {
+                              _runSingleCoinBacktest(sym);
+                            }
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: active ? const Color(0xFF2979FF) : const Color(0xFF172235),
+                              borderRadius: BorderRadius.circular(5),
+                              border: Border.all(color: active ? Colors.cyanAccent : Colors.white24),
+                            ),
+                            child: Text(
+                              tf.toUpperCase(),
+                              style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: active ? Colors.white : Colors.white70),
+                            ),
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
         const SizedBox(height: 10),
-        if (_loading)
-          const Padding(padding: EdgeInsets.all(40), child: Center(child: CircularProgressIndicator()))
+
+        if (_loading && _multiTfSignals.isEmpty)
+          const Padding(padding: EdgeInsets.all(40), child: Center(child: CircularProgressIndicator(color: Color(0xFF00E676))))
         else
           ..._inspectedSymbols.map((sym) {
-            final sig = _loadedSignals[sym];
-            if (sig == null) return const SizedBox.shrink();
+            final tfMap = _multiTfSignals[sym] ?? {};
+            if (tfMap.isEmpty) {
+              return Container(
+                margin: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(color: const Color(0xFF101724), borderRadius: BorderRadius.circular(8)),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('Loading $sym across 5m, 15m, 1h, 4h, 1d...', style: const TextStyle(fontSize: 12)),
+                    const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                  ],
+                ),
+              );
+            }
+
+            final activeTf = _coinSelectedTf[sym] ?? _globalTf;
+            final sig = tfMap[activeTf] ?? tfMap.values.first;
+            final isLong = sig.direction == 'LONG';
+            final dec = sig.markPrice < 1 ? 5 : (sig.markPrice < 100 ? 3 : 1);
+            final btReport = _coinBacktests[sym];
+            final btRunning = _coinBtRunning[sym] ?? false;
+            final activeStrat = _coinStrategyFilter[sym] ?? 'ALL';
+
             return Container(
-              margin: const EdgeInsets.only(bottom: 16),
+              margin: const EdgeInsets.only(bottom: 18),
               decoration: BoxDecoration(
                 color: const Color(0xFF101724),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.white12),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: isLong ? const Color(0xFF00E676).withOpacity(0.45) : const Color(0xFFFF3D57).withOpacity(0.45),
+                  width: 1.2,
+                ),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // 1. Coin Title & Remove Header
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                     decoration: const BoxDecoration(
                       color: Color(0xFF141E2F),
-                      borderRadius: BorderRadius.vertical(top: Radius.circular(9)),
+                      borderRadius: BorderRadius.vertical(top: Radius.circular(11)),
                     ),
                     child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text('$sym (${sig.direction}) • ${sig.confluenceScore}% ICT', style: const TextStyle(fontWeight: FontWeight.bold)),
+                        Text(sym, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: isLong ? const Color(0xFF00E676).withOpacity(0.2) : const Color(0xFFFF3D57).withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            '${sig.direction} (${activeTf.toUpperCase()})',
+                            style: TextStyle(
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.bold,
+                              color: isLong ? const Color(0xFF00E676) : const Color(0xFFFF3D57),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text('💎 ${sig.confluenceScore}% ICT', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF00E676))),
+                        const Spacer(),
+                        Text('\$${sig.markPrice.toStringAsFixed(dec)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.amberAccent)),
                         IconButton(
-                          icon: const Icon(Icons.close, size: 16, color: Colors.white54),
+                          icon: const Icon(Icons.close, size: 17, color: Colors.white54),
                           onPressed: () {
                             setState(() {
                               _inspectedSymbols.remove(sym);
-                              _loadedSignals.remove(sym);
+                              _multiTfSignals.remove(sym);
                             });
                           },
                         ),
                       ],
                     ),
                   ),
+
+                  // 2. Per-Coin Timeframe Selector Bar (5m, 15m, 1h, 4h, 1d)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    color: const Color(0xFF0D131F),
+                    child: Row(
+                      children: [
+                        const Text('TIMEFRAME: ', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.bold, color: Colors.white54)),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: Row(
+                              children: _allTimeframes.map((tf) {
+                                final tfSig = tfMap[tf];
+                                final isSelected = activeTf == tf;
+                                final tfLong = tfSig?.direction == 'LONG';
+                                return Padding(
+                                  padding: const EdgeInsets.only(right: 5),
+                                  child: InkWell(
+                                    onTap: () {
+                                      setState(() => _coinSelectedTf[sym] = tf);
+                                      _runSingleCoinBacktest(sym);
+                                    },
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                      decoration: BoxDecoration(
+                                        color: isSelected ? const Color(0xFF2979FF) : const Color(0xFF161F30),
+                                        borderRadius: BorderRadius.circular(5),
+                                        border: Border.all(
+                                          color: isSelected
+                                              ? Colors.cyanAccent
+                                              : (tfSig != null
+                                                  ? (tfLong ? const Color(0xFF00E676).withOpacity(0.4) : const Color(0xFFFF3D57).withOpacity(0.4))
+                                                  : Colors.white12),
+                                        ),
+                                      ),
+                                      child: Text(
+                                        tfSig != null ? '${tf.toUpperCase()} (${tfSig.direction[0]}•${tfSig.confluenceScore}%)' : tf.toUpperCase(),
+                                        style: TextStyle(
+                                          fontSize: 9.5,
+                                          fontWeight: FontWeight.bold,
+                                          color: isSelected ? Colors.white : Colors.white70,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              }).toList(),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // 3. Selected Timeframe ENTRY, SL, TP1, TP2, TP3 Matrix + Advice
+                  Padding(
+                    padding: const EdgeInsets.all(10),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              '🎯 ${activeTf.toUpperCase()} SNIPER LEVELS (${sig.chartPattern})',
+                              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.cyanAccent),
+                            ),
+                            Text(
+                              'R:R 1:${sig.liveRR.toStringAsFixed(1)} • RVOL ${sig.rvol.toStringAsFixed(1)}x',
+                              style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: Colors.amberAccent),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            _copyPricePill('ENTRY', sig.entry, dec, Colors.white),
+                            _copyPricePill('STOP LOSS', sig.stopLoss, dec, const Color(0xFFFF3D57)),
+                            _copyPricePill('TP1 (1.1R)', sig.tp1, dec, Colors.cyanAccent),
+                            _copyPricePill('TP2 (2.2R)', sig.tp2, dec, const Color(0xFF00E676)),
+                            _copyPricePill('TP3 (WIDE)', sig.tp3, dec, const Color(0xFF00E676)),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(sig.entryAdvice, style: const TextStyle(fontSize: 10, color: Colors.white70)),
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 5,
+                          runSpacing: 4,
+                          children: sig.activeConfluences.map((c) => Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF172234),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(color: Colors.white12),
+                            ),
+                            child: Text('✓ $c', style: const TextStyle(fontSize: 9, color: Colors.white70)),
+                          )).toList(),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // 4. All-Timeframe Entry, SL & TP Matrix Table for this Coin (5m, 15m, 1h, 4h, 1d)
+                  Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0C121D),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.white12),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '📊 ALL-TIMEFRAME ENTRY / SL / TP MATRIX FOR $sym',
+                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.amberAccent),
+                        ),
+                        const SizedBox(height: 6),
+                        SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: DataTable(
+                            headingRowHeight: 24,
+                            dataRowMinHeight: 26,
+                            dataRowMaxHeight: 28,
+                            columnSpacing: 12,
+                            horizontalMargin: 4,
+                            columns: const [
+                              DataColumn(label: Text('TF', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.bold, color: Colors.white54))),
+                              DataColumn(label: Text('BIAS', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.bold, color: Colors.white54))),
+                              DataColumn(label: Text('ENTRY', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.bold, color: Colors.white))),
+                              DataColumn(label: Text('SL', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.bold, color: Color(0xFFFF3D57)))),
+                              DataColumn(label: Text('TP1', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.bold, color: Colors.cyanAccent))),
+                              DataColumn(label: Text('TP2', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.bold, color: Color(0xFF00E676)))),
+                              DataColumn(label: Text('TP3', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.bold, color: Color(0xFF00E676)))),
+                            ],
+                            rows: _allTimeframes.where((tf) => tfMap.containsKey(tf)).map((tf) {
+                              final s = tfMap[tf]!;
+                              final d = s.markPrice < 1 ? 5 : (s.markPrice < 100 ? 3 : 1);
+                              final l = s.direction == 'LONG';
+                              return DataRow(
+                                selected: tf == activeTf,
+                                onSelectChanged: (_) {
+                                  setState(() => _coinSelectedTf[sym] = tf);
+                                  _runSingleCoinBacktest(sym);
+                                },
+                                cells: [
+                                  DataCell(Text(tf.toUpperCase(), style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
+                                  DataCell(Text('${s.direction} (${s.confluenceScore}%)', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: l ? const Color(0xFF00E676) : const Color(0xFFFF3D57)))),
+                                  DataCell(Text(s.entry.toStringAsFixed(d), style: const TextStyle(fontSize: 10))),
+                                  DataCell(Text(s.stopLoss.toStringAsFixed(d), style: const TextStyle(fontSize: 10, color: Color(0xFFFF3D57)))),
+                                  DataCell(Text(s.tp1.toStringAsFixed(d), style: const TextStyle(fontSize: 10, color: Colors.cyanAccent))),
+                                  DataCell(Text(s.tp2.toStringAsFixed(d), style: const TextStyle(fontSize: 10, color: Color(0xFF00E676)))),
+                                  DataCell(Text(s.tp3.toStringAsFixed(d), style: const TextStyle(fontSize: 10, color: Color(0xFF00E676)))),
+                                ],
+                              );
+                            }).toList(),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // 5. Interactive Delta Exchange Chart for Selected Timeframe
                   DeltaProInteractiveChart(
                     signal: sig,
                     height: 340,
                     onOpenFullScreen: () {
                       Navigator.push(context, MaterialPageRoute(builder: (_) => IctChartScreen(signal: sig, service: widget.service)));
                     },
+                  ),
+
+                  // 6. Embedded Per-Coin Strategy Backtest Lab (6 Months Back to Till Date)
+                  Container(
+                    margin: const EdgeInsets.all(10),
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0C121D),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.amberAccent.withOpacity(0.35)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Expanded(
+                              child: Text(
+                                '🧪 6-MONTH STRATEGY BACKTEST: $sym (${activeTf.toUpperCase()})',
+                                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.amberAccent),
+                              ),
+                            ),
+                            TextButton.icon(
+                              style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2), minimumSize: Size.zero),
+                              icon: const Icon(Icons.open_in_full, size: 13, color: Colors.cyanAccent),
+                              label: const Text('Full Audit Log', style: TextStyle(fontSize: 10, color: Colors.cyanAccent, fontWeight: FontWeight.bold)),
+                              onPressed: () => _openCoinBacktestFullModal(sym, activeTf, activeStrat),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        // Strategy Filter Pills for this coin
+                        SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            children: [
+                              {'key': 'ALL', 'label': 'All Pro ICT'},
+                              {'key': 'UNICORN', 'label': 'Unicorn (BB+FVG)'},
+                              {'key': 'AVWAP', 'label': 'PhenLabs AVWAP'},
+                              {'key': 'PO3', 'label': 'PO3 Asian Sweep'},
+                              {'key': 'CVD', 'label': 'CVD Absorption'},
+                            ].map((st) {
+                              final isSt = activeStrat == st['key'];
+                              return Padding(
+                                padding: const EdgeInsets.only(right: 5),
+                                child: InkWell(
+                                  onTap: () {
+                                    setState(() => _coinStrategyFilter[sym] = st['key']!);
+                                    _runSingleCoinBacktest(sym);
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                    decoration: BoxDecoration(
+                                      color: isSt ? Colors.amber.withOpacity(0.22) : const Color(0xFF151E2E),
+                                      borderRadius: BorderRadius.circular(4),
+                                      border: Border.all(color: isSt ? Colors.amberAccent : Colors.white12),
+                                    ),
+                                    child: Text(
+                                      st['label']!,
+                                      style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.bold, color: isSt ? Colors.amberAccent : Colors.white70),
+                                    ),
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        if (btRunning)
+                          const Padding(
+                            padding: EdgeInsets.all(10),
+                            child: Center(child: SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.amberAccent))),
+                          )
+                        else if (btReport != null) ...[
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceAround,
+                            children: [
+                              _btMiniStat('WIN RATE', '${btReport.winRatePct.toStringAsFixed(1)}%', const Color(0xFF00E676)),
+                              _btMiniStat('NET R', '+${btReport.netR.toStringAsFixed(1)}R', const Color(0xFF00E676)),
+                              _btMiniStat('PROFIT FACTOR', btReport.profitFactor.toStringAsFixed(2), Colors.cyanAccent),
+                              _btMiniStat('TRADES', '${btReport.totalTrades} (${btReport.wins}W/${btReport.losses}L)', Colors.white),
+                            ],
+                          ),
+                          if (btReport.trades.isNotEmpty) ...[
+                            const Divider(color: Colors.white12, height: 14),
+                            const Text('Recent Backtest Executions:', style: TextStyle(fontSize: 9.5, color: Colors.white54, fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 4),
+                            ...btReport.trades.take(3).map((t) {
+                              final win = t.rMultiple > 0;
+                              return Padding(
+                                padding: const EdgeInsets.only(bottom: 4),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        '${t.direction} • ${t.confluences.first} (\$${t.entryPrice.toStringAsFixed(dec)} -> \$${t.exitPrice.toStringAsFixed(dec)})',
+                                        style: const TextStyle(fontSize: 9.5, color: Colors.white70),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                    Text(
+                                      t.outcome,
+                                      style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.bold, color: win ? const Color(0xFF00E676) : const Color(0xFFFF3D57)),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            }),
+                          ],
+                        ],
+                      ],
+                    ),
+                  ),
+
+                  // 7. Quick Action Buttons (Execute Trade / Open Full Backtest / Full Chart)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.amberAccent)),
+                            icon: const Icon(Icons.history_toggle_off, size: 15, color: Colors.amberAccent),
+                            label: Text('Backtest $sym', style: const TextStyle(fontSize: 11, color: Colors.amberAccent, fontWeight: FontWeight.bold)),
+                            onPressed: () => _openCoinBacktestFullModal(sym, activeTf, activeStrat),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(backgroundColor: isLong ? const Color(0xFF00E676) : const Color(0xFFFF3D57)),
+                            icon: const Icon(Icons.bolt, size: 15, color: Colors.black),
+                            label: Text('Trade ${sig.direction}', style: const TextStyle(fontSize: 11, color: Colors.black, fontWeight: FontWeight.bold)),
+                            onPressed: () {
+                              PaperTradingService.addDemoSlot(sig);
+                              widget.onStateChanged();
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Executed $sym (${activeTf.toUpperCase()}) in My Trades!'), duration: const Duration(milliseconds: 900)),
+                              );
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               ),
@@ -1021,7 +1545,18 @@ class _Tab3ManualMultiCoinInspectorState extends State<Tab3ManualMultiCoinInspec
       ],
     );
   }
+
+  Widget _btMiniStat(String label, String val, Color color) {
+    return Column(
+      children: [
+        Text(label, style: const TextStyle(fontSize: 8.5, color: Colors.white54)),
+        const SizedBox(height: 2),
+        Text(val, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: color)),
+      ],
+    );
+  }
 }
+
 
 // ============================================================================
 // TAB 4: MY TRADES (Live Positions from Delta API + Paper Trading Forward Audit)
@@ -1204,7 +1739,16 @@ class Tab5IntelAndUnlocks extends StatelessWidget {
 // ============================================================================
 class _SixMonthBacktestSheet extends StatefulWidget {
   final DeltaExchangeIctService service;
-  const _SixMonthBacktestSheet({required this.service});
+  final String? singleSymbol;
+  final String initialTimeframe;
+  final String initialStrategy;
+
+  const _SixMonthBacktestSheet({
+    required this.service,
+    this.singleSymbol,
+    this.initialTimeframe = '15m',
+    this.initialStrategy = 'ALL',
+  });
 
   @override
   State<_SixMonthBacktestSheet> createState() => _SixMonthBacktestSheetState();
@@ -1213,21 +1757,32 @@ class _SixMonthBacktestSheet extends StatefulWidget {
 class _SixMonthBacktestSheetState extends State<_SixMonthBacktestSheet> {
   BacktestReport? _report;
   bool _running = true;
-  String _timeframe = '15m';
+  late String _timeframe;
+  late String _strategy;
 
   @override
   void initState() {
     super.initState();
+    _timeframe = widget.initialTimeframe;
+    _strategy = widget.initialStrategy;
     _startBacktest();
   }
 
   Future<void> _startBacktest() async {
     setState(() => _running = true);
-    final perps = await widget.service.fetchAllPerpetuals();
-    final symbols = perps.map((p) => p['symbol'] as String).toList();
+    List<String> symbols;
+    if (widget.singleSymbol != null && widget.singleSymbol!.isNotEmpty) {
+      symbols = [widget.singleSymbol!];
+    } else {
+      final perps = await widget.service.fetchAllPerpetuals();
+      symbols = perps.map((p) => p['symbol'] as String).toList();
+      if (symbols.isEmpty) symbols = ['BTCUSD', 'ETHUSD', 'SOLUSD', 'XRPUSD'];
+    }
+
     final rep = await widget.service.runSixMonthDeepBacktest(
-      symbols: symbols.isNotEmpty ? symbols : ['BTCUSD', 'ETHUSD', 'SOLUSD', 'XRPUSD'],
+      symbols: symbols,
       timeframe: _timeframe,
+      strategyFilter: _strategy,
     );
     if (!mounted) return;
     setState(() {
@@ -1238,6 +1793,7 @@ class _SixMonthBacktestSheetState extends State<_SixMonthBacktestSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final isSingle = widget.singleSymbol != null;
     return SizedBox(
       height: MediaQuery.of(context).size.height * 0.88,
       child: Padding(
@@ -1248,38 +1804,86 @@ class _SixMonthBacktestSheetState extends State<_SixMonthBacktestSheet> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text('6-Month Historical Backtest Audit', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                Expanded(
+                  child: Text(
+                    isSingle
+                        ? '6-Month Strategy Backtest: ${widget.singleSymbol}'
+                        : '6-Month Historical Backtest Audit (All Coins)',
+                    style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.bold),
+                  ),
+                ),
                 IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context)),
               ],
             ),
-            const Text('Simulating 12 Major Delta Perps over last 6 months', style: TextStyle(fontSize: 11, color: Colors.white54)),
+            Text(
+              isSingle
+                  ? 'Testing ${widget.singleSymbol} from 6 months back to till date across all timeframes & ICT strategies'
+                  : 'Simulating 12 Major Delta Perps over last 6 months',
+              style: const TextStyle(fontSize: 11, color: Colors.white54),
+            ),
             const SizedBox(height: 10),
-            Row(
-              children: ['15m', '1h', '4h'].map((tf) {
-                final active = _timeframe == tf;
-                return Padding(
-                  padding: const EdgeInsets.only(right: 6),
-                  child: ChoiceChip(
-                    label: Text(tf.toUpperCase()),
-                    selected: active,
-                    onSelected: (_) {
-                      setState(() => _timeframe = tf);
-                      _startBacktest();
-                    },
-                  ),
-                );
-              }).toList(),
+            // Timeframe Selector (5m, 15m, 1h, 4h, 1d)
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: ['5m', '15m', '1h', '4h', '1d'].map((tf) {
+                  final active = _timeframe == tf;
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: ChoiceChip(
+                      label: Text(tf.toUpperCase()),
+                      selected: active,
+                      onSelected: (_) {
+                        setState(() => _timeframe = tf);
+                        _startBacktest();
+                      },
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+            const SizedBox(height: 6),
+            // Strategy Filter Selector
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  {'k': 'ALL', 'n': 'All Strategies'},
+                  {'k': 'UNICORN', 'n': 'Unicorn (BB+FVG)'},
+                  {'k': 'AVWAP', 'n': 'PhenLabs AVWAP'},
+                  {'k': 'PO3', 'n': 'PO3 Asian Sweep'},
+                  {'k': 'CVD', 'n': 'CVD Absorption'},
+                ].map((s) {
+                  final active = _strategy == s['k'];
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: ChoiceChip(
+                      label: Text(s['n']!, style: const TextStyle(fontSize: 10.5)),
+                      selected: active,
+                      onSelected: (_) {
+                        setState(() => _strategy = s['k']!);
+                        _startBacktest();
+                      },
+                    ),
+                  );
+                }).toList(),
+              ),
             ),
             const SizedBox(height: 12),
             if (_running)
-              const Expanded(
+              Expanded(
                 child: Center(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      CircularProgressIndicator(color: Color(0xFF00E676)),
-                      SizedBox(height: 12),
-                      Text('Running 6-Month Deep Backtest across multiple Delta coins...', style: TextStyle(fontSize: 11, color: Colors.white70)),
+                      const CircularProgressIndicator(color: Color(0xFF00E676)),
+                      const SizedBox(height: 12),
+                      Text(
+                        isSingle
+                            ? 'Backtesting ${widget.singleSymbol} ($_timeframe • $_strategy) over last 6 months...'
+                            : 'Running 6-Month Deep Backtest across multiple Delta coins...',
+                        style: const TextStyle(fontSize: 11, color: Colors.white70),
+                      ),
                     ],
                   ),
                 ),
@@ -1299,7 +1903,10 @@ class _SixMonthBacktestSheetState extends State<_SixMonthBacktestSheet> {
                 ),
               ),
               const SizedBox(height: 12),
-              const Text('TRADE AUDIT LOG (6 MONTHS)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white54)),
+              Text(
+                'TRADE AUDIT LOG (${_report!.periodDescription})',
+                style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: Colors.amberAccent),
+              ),
               const SizedBox(height: 6),
               Expanded(
                 child: ListView.builder(
@@ -1307,6 +1914,7 @@ class _SixMonthBacktestSheetState extends State<_SixMonthBacktestSheet> {
                   itemBuilder: (ctx, i) {
                     final t = _report!.trades[i];
                     final isWin = t.rMultiple > 0;
+                    final dec = t.entryPrice < 1 ? 5 : (t.entryPrice < 100 ? 3 : 2);
                     return Container(
                       margin: const EdgeInsets.only(bottom: 6),
                       padding: const EdgeInsets.all(10),
@@ -1314,12 +1922,17 @@ class _SixMonthBacktestSheetState extends State<_SixMonthBacktestSheet> {
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text('${t.symbol} • ${t.direction}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                              Text('Entry: \$${t.entryPrice.toStringAsFixed(2)} -> Exit: \$${t.exitPrice.toStringAsFixed(2)}', style: const TextStyle(fontSize: 10, color: Colors.white60)),
-                            ],
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('${t.symbol} • ${t.direction} (${t.confluences.first})', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11.5)),
+                                const SizedBox(height: 2),
+                                Text('Entry: \$${t.entryPrice.toStringAsFixed(dec)} -> Exit: \$${t.exitPrice.toStringAsFixed(dec)}', style: const TextStyle(fontSize: 10, color: Colors.white70)),
+                                if (t.confluences.length > 1)
+                                  Text(t.confluences[1], style: const TextStyle(fontSize: 9.5, color: Colors.white54)),
+                              ],
+                            ),
                           ),
                           Text(t.outcome, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: isWin ? const Color(0xFF00E676) : const Color(0xFFFF3D57))),
                         ],
