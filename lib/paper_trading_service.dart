@@ -38,6 +38,7 @@ class PaperTradeSlot {
 }
 
 class PaperTradingService {
+  static Future<void> init() async {}
   static final List<PaperTradeSlot> activeSlots = [];
 
   static bool addDemoSlot(IctSignal sig, {String timeframe = '15m'}) {
