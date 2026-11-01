@@ -5,8 +5,10 @@ import 'delta_ict_service.dart';
 import 'ict_chart_screen.dart';
 import 'paper_trading_service.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await PaperTradingService.init();
+  await DeltaExchangeIctService.loadPersistentState();
   runApp(const DeltaIctTerminalV9App());
 }
 
@@ -41,6 +43,29 @@ class MainTerminalFrame extends StatefulWidget {
 }
 
 class _MainTerminalFrameState extends State<MainTerminalFrame> {
+  Future<void> _restoreMainState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!mounted) return;
+      setState(() {
+        _selectedTabIndex = prefs.getInt('saved_tab_index_v18') ?? 0;
+        _walletBalance = prefs.getDouble('saved_wallet_balance_v18') ?? 190.0;
+        _leverage = prefs.getDouble('saved_leverage_v18') ?? 10.0;
+        _autoTrade = prefs.getBool('saved_autotrade_v18') ?? false;
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _saveMainState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('saved_tab_index_v18', _selectedTabIndex);
+      await prefs.setDouble('saved_wallet_balance_v18', _walletBalance);
+      await prefs.setDouble('saved_leverage_v18', _leverage);
+      await prefs.setBool('saved_autotrade_v18', _autoTrade);
+    } catch (_) {}
+  }
+
   int _selectedTabIndex = 0;
   final DeltaExchangeIctService _service = DeltaExchangeIctService();
 
@@ -62,6 +87,7 @@ class _MainTerminalFrameState extends State<MainTerminalFrame> {
   void initState() {
     super.initState();
     _liveSession = DeltaExchangeIctService.getLiveSessionTelemetry();
+    _restoreMainState();
     _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) {
         setState(() {
@@ -467,7 +493,7 @@ class _MainTerminalFrameState extends State<MainTerminalFrame> {
         type: BottomNavigationBarType.fixed,
         selectedFontSize: 11,
         unselectedFontSize: 10,
-        onTap: (idx) => setState(() => _selectedTabIndex = idx),
+        onTap: (idx) { setState(() => _selectedTabIndex = idx); _saveMainState(); },
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.radar), label: 'Scanner'),
           BottomNavigationBarItem(icon: Icon(Icons.rocket_launch), label: 'Pumps/Dumps'),

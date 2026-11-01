@@ -458,6 +458,62 @@ class LiveSessionTelemetry {
 }
 
 class DeltaExchangeIctService {
+  // Persistent cache of when each Symbol+Timeframe+Direction signal was first detected
+  static Map<String, int> _signalFirstSeenMs = {};
+  static bool _firstSeenLoaded = false;
+
+  static Future<void> loadPersistentState() async {
+    if (_firstSeenLoaded) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('signal_first_seen_map_v18');
+      if (raw != null && raw.isNotEmpty) {
+        final decoded = jsonDecode(raw) as Map<String, dynamic>;
+        _signalFirstSeenMs = decoded.map((k, v) => MapEntry(k, (v as num).toInt()));
+      }
+    } catch (_) {}
+    _firstSeenLoaded = true;
+  }
+
+  static String resolveSignalDateAndTime({
+    required String symbol,
+    required String timeframe,
+    required String direction,
+    required List<Candle> candles,
+  }) {
+    final key = '${symbol}_${timeframe}_$direction';
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+
+    int triggerMs = _signalFirstSeenMs[key] ?? 0;
+    if (triggerMs <= 0) {
+      if (candles.length >= 2 && candles[candles.length - 2].timestamp > 0) {
+        triggerMs = candles[candles.length - 2].timestamp * 1000;
+      } else {
+        triggerMs = nowMs;
+      }
+      _signalFirstSeenMs[key] = triggerMs;
+      SharedPreferences.getInstance().then((prefs) {
+        prefs.setString('signal_first_seen_map_v18', jsonEncode(_signalFirstSeenMs));
+      });
+    }
+
+    final dtIst = DateTime.fromMillisecondsSinceEpoch(triggerMs).toUtc().add(const Duration(hours: 5, minutes: 30));
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final day = dtIst.day.toString().padLeft(2, '0');
+    final mon = months[dtIst.month - 1];
+    final yr = dtIst.year;
+    final hr12 = dtIst.hour % 12 == 0 ? 12 : dtIst.hour % 12;
+    final amPm = dtIst.hour >= 12 ? 'PM' : 'AM';
+    final minStr = dtIst.minute.toString().padLeft(2, '0');
+
+    final diffMin = ((nowMs - triggerMs) / 60000).round().clamp(0, 99999);
+    final ageStr = diffMin < 1
+        ? 'Just now ⚡'
+        : (diffMin < 60 ? '${diffMin}m ago' : '${diffMin ~/ 60}h ${diffMin % 60}m ago');
+
+    return '$day $mon $yr • ${hr12.toString().padLeft(2, '0')}:$minStr $amPm IST ($ageStr)';
+  }
+
   static const String baseUrl = 'https://api.india.delta.exchange';
   static const String wsUrl = 'wss://socket.india.delta.exchange';
 
