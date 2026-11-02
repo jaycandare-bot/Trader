@@ -1,7 +1,8 @@
-import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'delta_ict_service.dart';
 import 'ict_chart_screen.dart';
 import 'paper_trading_service.dart';
@@ -10,16 +11,18 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await PaperTradingService.init();
   await DeltaExchangeIctService.loadPersistentState();
-  runApp(const DeltaIctTerminalV9App());
+  final prefs = await SharedPreferences.getInstance();
+  runApp(DeltaIctTerminalV9App(prefs: prefs));
 }
 
 class DeltaIctTerminalV9App extends StatelessWidget {
-  const DeltaIctTerminalV9App({super.key});
+  final SharedPreferences prefs;
+  const DeltaIctTerminalV9App({super.key, required this.prefs});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Delta ICT Terminal v17',
+      title: 'Delta ICT Terminal v22',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color(0xFF090D14),
@@ -31,41 +34,24 @@ class DeltaIctTerminalV9App extends StatelessWidget {
           error: Color(0xFFFF3D57),
         ),
       ),
-      home: const MainTerminalFrame(),
+      home: MainTerminalFrame(prefs: prefs),
     );
   }
 }
 
 class MainTerminalFrame extends StatefulWidget {
-  const MainTerminalFrame({super.key});
+  final SharedPreferences prefs;
+  const MainTerminalFrame({super.key, required this.prefs});
 
   @override
   State<MainTerminalFrame> createState() => _MainTerminalFrameState();
 }
 
-class _MainTerminalFrameState extends State<MainTerminalFrame> {
-  Future<void> _restoreMainState() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      if (!mounted) return;
-      setState(() {
-        _selectedTabIndex = prefs.getInt('saved_tab_index_v18') ?? 0;
-        _walletBalance = prefs.getDouble('saved_wallet_balance_v18') ?? 190.0;
-        _leverage = prefs.getDouble('saved_leverage_v18') ?? 10.0;
-        _autoTrade = prefs.getBool('saved_autotrade_v18') ?? false;
-      });
-    } catch (_) {}
-  }
-
-  Future<void> _saveMainState() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setInt('saved_tab_index_v18', _selectedTabIndex);
-      await prefs.setDouble('saved_wallet_balance_v18', _walletBalance);
-      await prefs.setDouble('saved_leverage_v18', _leverage);
-      await prefs.setBool('saved_autotrade_v18', _autoTrade);
-    } catch (_) {}
-  }
+class _MainTerminalFrameState extends State<MainTerminalFrame> with WidgetsBindingObserver {
+  // Static memory cache so even if Flutter recreates the widget tree on Android activity resume, state is 100% preserved without refreshing!
+  static List<IctSignal> _cachedSignalsMemory = [];
+  static List<Map<String, dynamic>> _cachedPerpsMemory = [];
+  static MacroRegime? _cachedMacroMemory;
 
   int _selectedTabIndex = 0;
   final DeltaExchangeIctService _service = DeltaExchangeIctService();
@@ -73,12 +59,15 @@ class _MainTerminalFrameState extends State<MainTerminalFrame> {
   double _walletBalance = 190.0;
   double _leverage = 10.0;
   bool _autoTrade = false;
+  bool _scanAllMarket = false;
+  int _scannedProgressCount = 0;
+  int _totalTargetScanCount = 0;
   String _selectedTf = '15m';
 
   List<IctSignal> _scannedSignals = [];
   List<Map<String, dynamic>> _allPerps = [];
   MacroRegime? _macro;
-  bool _isScanning = true;
+  bool _isScanning = false;
 
   late LiveSessionTelemetry _liveSession;
   Timer? _clockTimer;
@@ -87,8 +76,27 @@ class _MainTerminalFrameState extends State<MainTerminalFrame> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _liveSession = DeltaExchangeIctService.getLiveSessionTelemetry();
-    _restoreMainState();
+
+    // Synchronous instant restore from SharedPreferences BEFORE first frame!
+    _selectedTabIndex = widget.prefs.getInt('saved_tab_index_v22') ?? 0;
+    _walletBalance = widget.prefs.getDouble('saved_wallet_balance_v22') ?? 190.0;
+    _leverage = widget.prefs.getDouble('saved_leverage_v22') ?? 10.0;
+    _autoTrade = widget.prefs.getBool('saved_autotrade_v22') ?? false;
+    _scanAllMarket = widget.prefs.getBool('saved_scan_all_market_v22') ?? false;
+
+    if (_cachedSignalsMemory.isNotEmpty) {
+      _scannedSignals = List<IctSignal>.from(_cachedSignalsMemory);
+      _allPerps = List<Map<String, dynamic>>.from(_cachedPerpsMemory);
+      _macro = _cachedMacroMemory;
+      _isScanning = false;
+      // Refresh silently in background without wiping existing cards
+      _runFullScan(silent: true);
+    } else {
+      _runFullScan(silent: false);
+    }
+
     _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) {
         setState(() {
@@ -96,16 +104,39 @@ class _MainTerminalFrameState extends State<MainTerminalFrame> {
         });
       }
     });
-    _autoScanTimer = Timer.periodic(const Duration(seconds: 35), (_) {
+    // Silent background update every 45s — never shows spinner or resets scroll position
+    _autoScanTimer = Timer.periodic(const Duration(seconds: 45), (_) {
       if (mounted && !_isScanning) {
         _runFullScan(silent: true);
       }
     });
-    _runFullScan();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+      _saveMainState();
+    } else if (state == AppLifecycleState.resumed) {
+      // When user reopens app from background, NEVER wipe the UI—just update silently in background!
+      if (!_isScanning) {
+        _runFullScan(silent: true);
+      }
+    }
+  }
+
+  Future<void> _saveMainState() async {
+    try {
+      await widget.prefs.setInt('saved_tab_index_v22', _selectedTabIndex);
+      await widget.prefs.setDouble('saved_wallet_balance_v22', _walletBalance);
+      await widget.prefs.setDouble('saved_leverage_v22', _leverage);
+      await widget.prefs.setBool('saved_autotrade_v22', _autoTrade);
+      await widget.prefs.setBool('saved_scan_all_market_v22', _scanAllMarket);
+    } catch (_) {}
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _clockTimer?.cancel();
     _autoScanTimer?.cancel();
     super.dispose();
@@ -191,9 +222,72 @@ class _MainTerminalFrameState extends State<MainTerminalFrame> {
     );
   }
 
+  void _toggleScanAllMarket() {
+    setState(() {
+      _scanAllMarket = !_scanAllMarket;
+    });
+    _saveMainState();
+    _runFullScan(silent: true);
+  }
+
+  Future<IctSignal?> _scanSingleCoinOnDemand(String symbol) async {
+    try {
+      final upper = symbol.trim().toUpperCase();
+      Map<String, dynamic>? match;
+      for (final p in _allPerps) {
+        if ((p['symbol'] as String).toUpperCase() == upper) {
+          match = p;
+          break;
+        }
+      }
+      final candlesFuts = await Future.wait([
+        _service.fetchCandles(upper, resolution: _selectedTf, count: 85),
+        _service.fetchCandles(upper, resolution: '1h', count: 45),
+        _service.fetchCandles(upper, resolution: '4h', count: 35),
+        _service.fetchCandles('BTCUSD', resolution: _selectedTf, count: 60),
+      ]);
+      final candlesLtf = candlesFuts[0];
+      if (candlesLtf.isEmpty) return null;
+      final macro = _macro ??
+          await _service.fetchMacroRegime(
+            btcCandles: candlesFuts[3],
+            resolution: _selectedTf,
+            allPerps: _allPerps,
+          );
+      final sig = _service.evaluateIctConfluence(
+        symbol: upper,
+        productId: (match?['product_id'] as int?) ?? 1,
+        markPrice: (match?['mark_price'] as double?) ?? candlesLtf.last.close,
+        fundingRate: (match?['funding_rate'] as double?) ?? 0.01,
+        openInterest: (match?['open_interest'] as double?) ?? 25000.0,
+        candles: candlesLtf,
+        htfCandles: candlesFuts[1],
+        htf4hCandles: candlesFuts[2],
+        btcCandles: candlesFuts[3],
+        macro: macro,
+        timeframe: _selectedTf,
+      );
+      if (sig != null && mounted) {
+        setState(() {
+          _scannedSignals.removeWhere((s) => s.symbol.toUpperCase() == upper);
+          _scannedSignals.insert(0, sig);
+          _cachedSignalsMemory = List<IctSignal>.from(_scannedSignals);
+        });
+      }
+      return sig;
+    } catch (_) {
+      return null;
+    }
+  }
 
   Future<void> _runFullScan({bool silent = false}) async {
-    if (!silent) setState(() => _isScanning = true);
+    // Only show full-screen loading indicator if we have zero signals loaded yet
+    if (!silent && _scannedSignals.isEmpty) {
+      setState(() {
+        _isScanning = true;
+        _scannedProgressCount = 0;
+      });
+    }
     try {
       await _service.ensureLocksLoaded();
       final perps = await _service.fetchAllPerpetuals();
@@ -205,26 +299,62 @@ class _MainTerminalFrameState extends State<MainTerminalFrame> {
       );
 
       final List<IctSignal> loaded = [];
-      for (final p in perps.take(24)) {
-        final sym = p['symbol'] as String;
-        final candlesLtf = await _service.fetchCandles(sym, resolution: _selectedTf, count: 85);
-        final candles1h = await _service.fetchCandles(sym, resolution: '1h', count: 45);
-        final candles4h = await _service.fetchCandles(sym, resolution: '4h', count: 35);
+      final candidates = _scanAllMarket ? perps : perps.take(64).toList();
+      if (mounted) {
+        setState(() {
+          _allPerps = perps;
+          _cachedPerpsMemory = perps;
+          _totalTargetScanCount = candidates.length;
+        });
+      }
 
-        final sig = _service.evaluateIctConfluence(
-          symbol: sym,
-          productId: p['product_id'] as int,
-          markPrice: p['mark_price'] as double,
-          fundingRate: p['funding_rate'] as double,
-          openInterest: p['open_interest'] as double,
-          candles: candlesLtf,
-          htfCandles: candles1h,
-          htf4hCandles: candles4h,
-          btcCandles: btcCandles,
-          macro: macro,
-          timeframe: _selectedTf,
+      const int batchSize = 10;
+      for (int i = 0; i < candidates.length; i += batchSize) {
+        final batch = candidates.sublist(
+          i,
+          (i + batchSize > candidates.length) ? candidates.length : i + batchSize,
         );
-        if (sig != null) loaded.add(sig);
+        final results = await Future.wait(batch.map((p) async {
+          try {
+            final sym = p['symbol'] as String;
+            final candlesFuts = await Future.wait([
+              _service.fetchCandles(sym, resolution: _selectedTf, count: 85),
+              _service.fetchCandles(sym, resolution: '1h', count: 45),
+              _service.fetchCandles(sym, resolution: '4h', count: 35),
+            ]);
+            return _service.evaluateIctConfluence(
+              symbol: sym,
+              productId: p['product_id'] as int,
+              markPrice: p['mark_price'] as double,
+              fundingRate: p['funding_rate'] as double,
+              openInterest: p['open_interest'] as double,
+              candles: candlesFuts[0],
+              htfCandles: candlesFuts[1],
+              htf4hCandles: candlesFuts[2],
+              btcCandles: btcCandles,
+              macro: macro,
+              timeframe: _selectedTf,
+            );
+          } catch (_) {
+            return null;
+          }
+        }));
+        for (final sig in results) {
+          if (sig != null) loaded.add(sig);
+        }
+        if (mounted) {
+          loaded.sort((a, b) => b.confluenceScore.compareTo(a.confluenceScore));
+          setState(() {
+            _scannedProgressCount = (i + batch.length).clamp(0, candidates.length);
+            _macro = macro;
+            _cachedMacroMemory = macro;
+            if (!silent || _scannedSignals.isEmpty) {
+              _scannedSignals = List<IctSignal>.from(loaded);
+              _cachedSignalsMemory = List<IctSignal>.from(loaded);
+            }
+            if (loaded.length >= 8) _isScanning = false;
+          });
+        }
       }
 
       loaded.sort((a, b) => b.confluenceScore.compareTo(a.confluenceScore));
@@ -234,6 +364,8 @@ class _MainTerminalFrameState extends State<MainTerminalFrame> {
         _allPerps = perps;
         _macro = macro;
         _scannedSignals = loaded;
+        _cachedSignalsMemory = List<IctSignal>.from(loaded);
+        _scannedProgressCount = candidates.length;
         _isScanning = false;
       });
     } catch (_) {
@@ -311,14 +443,16 @@ class _MainTerminalFrameState extends State<MainTerminalFrame> {
                           .map((l) => DropdownMenuItem(value: l, child: Text('${l.toInt()}x')))
                           .toList(),
                       onChanged: (v) {
-                        if (v != null) setState(() => _leverage = v);
+                        if (v != null) {
+                          setState(() => _leverage = v);
+                          _saveMainState();
+                        }
                       },
                     ),
                   ),
                 ],
               ),
               const SizedBox(height: 16),
-              // 6-Month Backtest Launcher Button
               OutlinedButton.icon(
                 style: OutlinedButton.styleFrom(
                   side: const BorderSide(color: Colors.amberAccent),
@@ -344,6 +478,7 @@ class _MainTerminalFrameState extends State<MainTerminalFrame> {
                   setState(() {
                     _walletBalance = double.tryParse(balCtrl.text) ?? _walletBalance;
                   });
+                  await _saveMainState();
                   if (mounted) Navigator.pop(ctx);
                 },
               ),
@@ -368,20 +503,27 @@ class _MainTerminalFrameState extends State<MainTerminalFrame> {
     final tabs = [
       Tab1Scanner(
         signals: _scannedSignals,
+        allPerps: _allPerps,
         macro: _macro,
         isLoading: _isScanning,
+        scanAllMarket: _scanAllMarket,
+        scannedCount: _scannedProgressCount,
+        totalTargetCount: _totalTargetScanCount,
         service: _service,
-        onRefresh: _runFullScan,
+        onRefresh: () => _runFullScan(silent: true),
+        onToggleScanAllMarket: _toggleScanAllMarket,
+        onScanSingleCoin: _scanSingleCoinOnDemand,
         onStateChanged: () => setState(() {}),
       ),
       Tab2PumpsAndDumps(
         signals: _scannedSignals,
         isLoading: _isScanning,
         service: _service,
-        onRefresh: _runFullScan,
+        onRefresh: () => _runFullScan(silent: true),
         onStateChanged: () => setState(() {}),
       ),
       Tab3ManualMultiCoinInspector(
+        prefs: widget.prefs,
         allPerps: _allPerps,
         service: _service,
         macro: _macro,
@@ -455,7 +597,10 @@ class _MainTerminalFrameState extends State<MainTerminalFrame> {
                         child: Switch(
                           value: _autoTrade,
                           activeColor: const Color(0xFF00E676),
-                          onChanged: (v) => setState(() => _autoTrade = v),
+                          onChanged: (v) {
+                            setState(() => _autoTrade = v);
+                            _saveMainState();
+                          },
                         ),
                       ),
                     ),
@@ -463,16 +608,15 @@ class _MainTerminalFrameState extends State<MainTerminalFrame> {
                 ),
               ),
               const Spacer(),
-              // Settings Icon Button
               IconButton(
                 tooltip: 'Settings & Backtest',
                 icon: const Icon(Icons.settings, color: Colors.cyanAccent, size: 21),
                 onPressed: _openSettingsModal,
               ),
               IconButton(
-                tooltip: 'Refresh Market',
+                tooltip: 'Silent Refresh Market',
                 icon: const Icon(Icons.refresh, color: Colors.white70, size: 21),
-                onPressed: _runFullScan,
+                onPressed: () => _runFullScan(silent: true),
               ),
             ],
           ),
@@ -494,7 +638,10 @@ class _MainTerminalFrameState extends State<MainTerminalFrame> {
         type: BottomNavigationBarType.fixed,
         selectedFontSize: 11,
         unselectedFontSize: 10,
-        onTap: (idx) { setState(() => _selectedTabIndex = idx); _saveMainState(); },
+        onTap: (idx) {
+          setState(() => _selectedTabIndex = idx);
+          _saveMainState();
+        },
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.radar), label: 'Scanner'),
           BottomNavigationBarItem(icon: Icon(Icons.rocket_launch), label: 'Pumps/Dumps'),
@@ -508,23 +655,35 @@ class _MainTerminalFrameState extends State<MainTerminalFrame> {
 }
 
 // ============================================================================
-// TAB 1: ALL COINS SCANNER (Sub-Tabs: All >75%, Elite >85%, Pullback Long/Short)
+// TAB 1: ALL COINS SCANNER (Live Search Bar + Scan All 150+ Toggle + Sub-Tabs)
 // ============================================================================
 class Tab1Scanner extends StatefulWidget {
   final List<IctSignal> signals;
+  final List<Map<String, dynamic>> allPerps;
   final MacroRegime? macro;
   final bool isLoading;
+  final bool scanAllMarket;
+  final int scannedCount;
+  final int totalTargetCount;
   final DeltaExchangeIctService service;
   final VoidCallback onRefresh;
+  final VoidCallback onToggleScanAllMarket;
+  final Future<IctSignal?> Function(String symbol) onScanSingleCoin;
   final VoidCallback onStateChanged;
 
   const Tab1Scanner({
     super.key,
     required this.signals,
+    required this.allPerps,
     required this.macro,
     required this.isLoading,
+    required this.scanAllMarket,
+    required this.scannedCount,
+    required this.totalTargetCount,
     required this.service,
     required this.onRefresh,
+    required this.onToggleScanAllMarket,
+    required this.onScanSingleCoin,
     required this.onStateChanged,
   });
 
@@ -533,16 +692,43 @@ class Tab1Scanner extends StatefulWidget {
 }
 
 class _Tab1ScannerState extends State<Tab1Scanner> {
-  String _filter = 'Elite'; // 'All', 'Elite', 'Pullback'
+  String _filter = 'Elite';
+  String _searchQuery = '';
+  bool _scanningOnDemand = false;
+  final TextEditingController _searchCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final q = _searchQuery.trim().toUpperCase();
+
     final filtered = widget.signals.where((s) {
+      if (q.isNotEmpty) {
+        return s.symbol.toUpperCase().contains(q);
+      }
       if (_filter == 'All') return s.confluenceScore >= 75;
       if (_filter == 'Elite') return s.confluenceScore >= 85;
-      if (_filter == 'Pullback') return s.structureHealth.contains('PULLBACK') || s.avwapState.stage.contains('PULLBACK');
+      if (_filter == 'Pullback') {
+        return s.structureHealth.contains('PULLBACK') || s.avwapState.stage.contains('PULLBACK');
+      }
       return true;
     }).toList();
+
+    final unscannedMatches = q.isEmpty
+        ? <Map<String, dynamic>>[]
+        : widget.allPerps
+            .where((p) {
+              final sym = (p['symbol'] as String).toUpperCase();
+              final alreadyInList = widget.signals.any((s) => s.symbol.toUpperCase() == sym);
+              return sym.contains(q) && !alreadyInList;
+            })
+            .take(5)
+            .toList();
 
     final m = widget.macro;
 
@@ -555,37 +741,187 @@ class _Tab1ScannerState extends State<Tab1Scanner> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('BTC: \$${m.btcPrice.toStringAsFixed(0)} (${m.btcChangePct >= 0 ? '+' : ''}${m.btcChangePct.toStringAsFixed(2)}%)',
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11.5)),
-                Text('BTC.D: ${m.btcDominance.toStringAsFixed(2)}%',
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11.5, color: Colors.amberAccent)),
-                Text(m.altcoinRegime.split(':').first,
-                    style: const TextStyle(fontSize: 11, color: Colors.cyanAccent, fontWeight: FontWeight.bold)),
+                Text(
+                  'BTC: \$${m.btcPrice.toStringAsFixed(0)} (${m.btcChangePct >= 0 ? '+' : ''}${m.btcChangePct.toStringAsFixed(2)}%)',
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11.5),
+                ),
+                Text(
+                  'BTC.D: ${m.btcDominance.toStringAsFixed(2)}%',
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11.5, color: Colors.amberAccent),
+                ),
+                Text(
+                  m.altcoinRegime.split(':').first,
+                  style: const TextStyle(fontSize: 11, color: Colors.cyanAccent, fontWeight: FontWeight.bold),
+                ),
               ],
             ),
           ),
-        // Sub-Tabs Header
+
+        // Live Search Bar + "Scan All 150+ Delta Coins" Toggle Button
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 4),
           child: Row(
             children: [
-              _subTab('All (>75%)', 'All', widget.signals.where((s) => s.confluenceScore >= 75).length),
-              const SizedBox(width: 6),
-              _subTab('💎 Elite (>85%)', 'Elite', widget.signals.where((s) => s.confluenceScore >= 85).length),
-              const SizedBox(width: 6),
-              _subTab('🛡️ Pullbacks', 'Pullback', widget.signals.where((s) => s.structureHealth.contains('PULLBACK') || s.avwapState.stage.contains('PULLBACK')).length),
+              Expanded(
+                child: SizedBox(
+                  height: 38,
+                  child: TextField(
+                    controller: _searchCtrl,
+                    style: const TextStyle(fontSize: 12),
+                    decoration: InputDecoration(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
+                      prefixIcon: const Icon(Icons.search, size: 17, color: Colors.cyanAccent),
+                      suffixIcon: _searchQuery.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(Icons.clear, size: 15, color: Colors.white54),
+                              onPressed: () {
+                                _searchCtrl.clear();
+                                setState(() => _searchQuery = '');
+                              },
+                            )
+                          : null,
+                      hintText: 'Search coin (e.g. ARIAUSD, SOLUSD)...',
+                      hintStyle: const TextStyle(fontSize: 11, color: Colors.white54),
+                      filled: true,
+                      fillColor: const Color(0xFF131B2A),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: Colors.white24),
+                      ),
+                    ),
+                    onChanged: (val) => setState(() => _searchQuery = val),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              InkWell(
+                onTap: widget.onToggleScanAllMarket,
+                child: Container(
+                  height: 38,
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  decoration: BoxDecoration(
+                    color: widget.scanAllMarket
+                        ? const Color(0xFF00E676).withOpacity(0.2)
+                        : const Color(0xFF141C2B),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: widget.scanAllMarket ? const Color(0xFF00E676) : Colors.amberAccent.withOpacity(0.6),
+                      width: 1.2,
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        widget.scanAllMarket ? Icons.public : Icons.bolt,
+                        size: 15,
+                        color: widget.scanAllMarket ? const Color(0xFF00E676) : Colors.amberAccent,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        widget.scanAllMarket
+                            ? 'All 150+ ON (${widget.scannedCount}/${widget.totalTargetCount})'
+                            : 'Scan All 150+ Coins',
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.bold,
+                          color: widget.scanAllMarket ? const Color(0xFF00E676) : Colors.amberAccent,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ],
           ),
         ),
+
+        // Sub-Tabs Header + Live Scanned Counter
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _subTab('All (>75%)', 'All', widget.signals.where((s) => s.confluenceScore >= 75).length),
+                const SizedBox(width: 6),
+                _subTab('💎 Elite (>85%)', 'Elite', widget.signals.where((s) => s.confluenceScore >= 85).length),
+                const SizedBox(width: 6),
+                _subTab(
+                  '🛡️ Pullbacks',
+                  'Pullback',
+                  widget.signals
+                      .where((s) => s.structureHealth.contains('PULLBACK') || s.avwapState.stage.contains('PULLBACK'))
+                      .length,
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  'Scanned: ${widget.scannedCount}/${widget.totalTargetCount > 0 ? widget.totalTargetCount : widget.signals.length}',
+                  style: const TextStyle(fontSize: 10, color: Colors.white54, fontWeight: FontWeight.bold),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        if (unscannedMatches.isNotEmpty)
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: const Color(0xFF141E30),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.cyanAccent.withOpacity(0.4)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '⚡ Matching Delta Coins Not Yet in Batch (Tap to Instant Scan):',
+                  style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.cyanAccent),
+                ),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: unscannedMatches.map((p) {
+                    final sym = p['symbol'] as String;
+                    final chg = (p['change_24h_pct'] as double?) ?? 0.0;
+                    return ActionChip(
+                      backgroundColor: const Color(0xFF1B2840),
+                      avatar: _scanningOnDemand
+                          ? const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2))
+                          : const Icon(Icons.radar, size: 14, color: Color(0xFF00E676)),
+                      label: Text(
+                        '$sym (${chg >= 0 ? '+' : ''}${chg.toStringAsFixed(1)}%)',
+                        style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: Colors.white),
+                      ),
+                      onPressed: _scanningOnDemand
+                          ? null
+                          : () async {
+                              setState(() => _scanningOnDemand = true);
+                              await widget.onScanSingleCoin(sym);
+                              if (mounted) setState(() => _scanningOnDemand = false);
+                            },
+                    );
+                  }).toList(),
+                ),
+              ],
+            ),
+          ),
+
         Expanded(
-          child: widget.isLoading
+          child: widget.isLoading && widget.signals.isEmpty
               ? const Center(child: CircularProgressIndicator(color: Color(0xFF00E676)))
               : filtered.isEmpty
                   ? Center(
                       child: TextButton.icon(
                         onPressed: widget.onRefresh,
                         icon: const Icon(Icons.refresh),
-                        label: const Text('No setups matching filter. Tap to rescan.'),
+                        label: Text(
+                          q.isNotEmpty
+                              ? 'No scanned signal for "$q" yet. Tap a chip above or tap to rescan.'
+                              : 'No setups matching filter. Tap to rescan.',
+                        ),
                       ),
                     )
                   : ListView.builder(
@@ -609,7 +945,10 @@ class _Tab1ScannerState extends State<Tab1Scanner> {
           borderRadius: BorderRadius.circular(6),
           border: Border.all(color: active ? Colors.cyanAccent : Colors.white24),
         ),
-        child: Text('$label ($count)', style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: active ? Colors.white : Colors.white70)),
+        child: Text(
+          '$label ($count)',
+          style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: active ? Colors.white : Colors.white70),
+        ),
       ),
     );
   }
@@ -642,22 +981,54 @@ class _Tab1ScannerState extends State<Tab1Scanner> {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                       decoration: BoxDecoration(
-                        color: isLong ? const Color(0xFF00E676).withOpacity(0.18) : const Color(0xFFFF3D57).withOpacity(0.18),
+                        color: isLong
+                            ? const Color(0xFF00E676).withOpacity(0.18)
+                            : const Color(0xFFFF3D57).withOpacity(0.18),
                         borderRadius: BorderRadius.circular(4),
                       ),
-                      child: Text(sig.direction, style: TextStyle(color: isLong ? const Color(0xFF00E676) : const Color(0xFFFF3D57), fontWeight: FontWeight.bold, fontSize: 11)),
+                      child: Text(
+                        sig.direction,
+                        style: TextStyle(
+                          color: isLong ? const Color(0xFF00E676) : const Color(0xFFFF3D57),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 11,
+                        ),
+                      ),
                     ),
                   ],
                 ),
-                Text('💎 ${sig.confluenceScore}% ICT', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF00E676))),
+                Text(
+                  '💎 ${sig.confluenceScore}% ICT',
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF00E676)),
+                ),
               ],
             ),
-            const SizedBox(height: 6),
-            Text(sig.pumpDumpHeadline, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.cyanAccent)),
+            const SizedBox(height: 5),
+            Row(
+              children: [
+                const Icon(Icons.schedule, size: 12, color: Colors.amberAccent),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    '🕒 Signal: ${sig.launchedAgo}',
+                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.amberAccent),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 5),
+            Text(
+              sig.pumpDumpHeadline,
+              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.cyanAccent),
+            ),
+            const SizedBox(height: 3),
+            Text(
+              sig.reversalFlipBrief,
+              style: const TextStyle(fontSize: 10.5, color: Colors.white, fontWeight: FontWeight.w500),
+            ),
             const SizedBox(height: 4),
-            Text(sig.entryAdvice, style: const TextStyle(fontSize: 10.5, color: Colors.white70)),
+            Text(sig.entryAdvice, style: const TextStyle(fontSize: 10, color: Colors.white70)),
             const SizedBox(height: 8),
-            // Prices Matrix
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -673,7 +1044,10 @@ class _Tab1ScannerState extends State<Tab1Scanner> {
               children: [
                 Expanded(
                   child: OutlinedButton.icon(
-                    style: OutlinedButton.styleFrom(side: const BorderSide(color: Color(0xFF00E676)), padding: const EdgeInsets.symmetric(vertical: 8)),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Color(0xFF00E676)),
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                    ),
                     icon: const Icon(Icons.candlestick_chart, size: 14, color: Color(0xFF00E676)),
                     label: const Text('Chart', style: TextStyle(fontSize: 11, color: Color(0xFF00E676))),
                     onPressed: () {
@@ -687,14 +1061,23 @@ class _Tab1ScannerState extends State<Tab1Scanner> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(backgroundColor: isLong ? const Color(0xFF00E676) : const Color(0xFFFF3D57), padding: const EdgeInsets.symmetric(vertical: 8)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: isLong ? const Color(0xFF00E676) : const Color(0xFFFF3D57),
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                    ),
                     icon: const Icon(Icons.bolt, size: 14, color: Colors.black),
-                    label: Text('Trade ${sig.direction}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.black)),
+                    label: Text(
+                      'Trade ${sig.direction}',
+                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.black),
+                    ),
                     onPressed: () {
                       PaperTradingService.addDemoSlot(sig);
                       widget.onStateChanged();
                       ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Executed ${sig.symbol} in My Trades & Demo Lab!'), duration: const Duration(milliseconds: 900)),
+                        SnackBar(
+                          content: Text('Executed ${sig.symbol} in My Trades & Demo Lab!'),
+                          duration: const Duration(milliseconds: 900),
+                        ),
                       );
                     },
                   ),
@@ -711,7 +1094,9 @@ class _Tab1ScannerState extends State<Tab1Scanner> {
     return InkWell(
       onTap: () {
         Clipboard.setData(ClipboardData(text: val.toStringAsFixed(dec)));
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Copied $label: $val'), duration: const Duration(milliseconds: 500)));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Copied $label: $val'), duration: const Duration(milliseconds: 500)),
+        );
       },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
@@ -728,7 +1113,7 @@ class _Tab1ScannerState extends State<Tab1Scanner> {
 }
 
 // ============================================================================
-// TAB 2: PERFECT PUMPS & DUMPS (Scans 6-10+% Ready Moves)
+// TAB 2: PERFECT PUMPS & DUMPS (Scans 6-14+% Ready Moves)
 // ============================================================================
 class Tab2PumpsAndDumps extends StatelessWidget {
   final List<IctSignal> signals;
@@ -766,7 +1151,7 @@ class Tab2PumpsAndDumps extends StatelessWidget {
               SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Live High-Velocity Pump / Dump Scanner (Ready for 6-10+% Move)',
+                  'Live High-Velocity Pump / Dump Scanner (Ready for 6-14+% Move)',
                   style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
                 ),
               ),
@@ -774,7 +1159,7 @@ class Tab2PumpsAndDumps extends StatelessWidget {
           ),
         ),
         Expanded(
-          child: isLoading
+          child: isLoading && signals.isEmpty
               ? const Center(child: CircularProgressIndicator(color: Color(0xFF00E676)))
               : ListView.builder(
                   padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -782,6 +1167,7 @@ class Tab2PumpsAndDumps extends StatelessWidget {
                   itemBuilder: (ctx, i) {
                     final sig = pumpDumps[i];
                     final isLong = sig.direction == 'LONG';
+                    final dec = sig.markPrice < 1 ? 5 : (sig.markPrice < 100 ? 3 : 2);
                     return Card(
                       color: const Color(0xFF111724),
                       margin: const EdgeInsets.only(bottom: 12),
@@ -797,7 +1183,7 @@ class Tab2PumpsAndDumps extends StatelessWidget {
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                Text('${sig.symbol} • ${sig.direction}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                                Text('${sig.symbol} • ${sig.direction} (${sig.confluenceScore}%)', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                                 Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                                   decoration: BoxDecoration(color: Colors.purple.withOpacity(0.2), borderRadius: BorderRadius.circular(6)),
@@ -805,10 +1191,17 @@ class Tab2PumpsAndDumps extends StatelessWidget {
                                 ),
                               ],
                             ),
+                            const SizedBox(height: 4),
+                            Text('🕒 Signal: ${sig.launchedAgo}', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.amberAccent)),
+                            const SizedBox(height: 5),
+                            Text(sig.pumpDumpHeadline, style: const TextStyle(fontSize: 11.5, color: Colors.cyanAccent, fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 3),
+                            Text(sig.reversalFlipBrief, style: const TextStyle(fontSize: 10.5, color: Colors.white)),
                             const SizedBox(height: 6),
-                            Text(sig.pumpDumpHeadline, style: const TextStyle(fontSize: 11.5, color: Colors.white)),
-                            const SizedBox(height: 6),
-                            Text('Mark Price: \$${sig.markPrice.toStringAsFixed(4)} | Entry Zone: \$${sig.entry.toStringAsFixed(4)}', style: const TextStyle(fontSize: 11, color: Colors.white70)),
+                            Text(
+                              'Mark: \$${sig.markPrice.toStringAsFixed(dec)} | Entry: \$${sig.entry.toStringAsFixed(dec)} | SL: \$${sig.stopLoss.toStringAsFixed(dec)} | TP3: \$${sig.tp3.toStringAsFixed(dec)}',
+                              style: const TextStyle(fontSize: 10.5, color: Colors.white70),
+                            ),
                             const SizedBox(height: 10),
                             Row(
                               children: [
@@ -849,6 +1242,7 @@ class Tab2PumpsAndDumps extends StatelessWidget {
 // TAB 3: MANUAL MULTI-COIN INSPECTOR (Side-by-Side Comparison with + Add Button)
 // ============================================================================
 class Tab3ManualMultiCoinInspector extends StatefulWidget {
+  final SharedPreferences prefs;
   final List<Map<String, dynamic>> allPerps;
   final DeltaExchangeIctService service;
   final MacroRegime? macro;
@@ -856,6 +1250,7 @@ class Tab3ManualMultiCoinInspector extends StatefulWidget {
 
   const Tab3ManualMultiCoinInspector({
     super.key,
+    required this.prefs,
     required this.allPerps,
     required this.service,
     required this.macro,
@@ -868,6 +1263,9 @@ class Tab3ManualMultiCoinInspector extends StatefulWidget {
 
 class _Tab3ManualMultiCoinInspectorState extends State<Tab3ManualMultiCoinInspector> {
   static const List<String> _allTimeframes = ['5m', '15m', '1h', '4h', '1d'];
+  static final Map<String, Map<String, IctSignal>> _cachedMultiTfMemory = {};
+  static final Map<String, BacktestReport> _cachedBtMemory = {};
+
   final List<String> _inspectedSymbols = ['BTCUSD', 'ETHUSD'];
 
   // symbol -> timeframe -> IctSignal
@@ -885,16 +1283,55 @@ class _Tab3ManualMultiCoinInspectorState extends State<Tab3ManualMultiCoinInspec
   @override
   void initState() {
     super.initState();
-    _loadAllSymbols();
+    _restorePersistedInspectorState();
+    _multiTfSignals.addAll(_cachedMultiTfMemory);
+    _coinBacktests.addAll(_cachedBtMemory);
+    _loadAllSymbols(silent: _multiTfSignals.isNotEmpty);
   }
 
-  Future<void> _loadAllSymbols() async {
-    setState(() => _loading = true);
-    for (final sym in _inspectedSymbols) {
+  void _restorePersistedInspectorState() {
+    try {
+      final savedCoins = widget.prefs.getStringList('inspector_saved_symbols_v22');
+      if (savedCoins != null && savedCoins.isNotEmpty) {
+        _inspectedSymbols
+          ..clear()
+          ..addAll(savedCoins);
+      }
+      final savedGlobalTf = widget.prefs.getString('inspector_global_tf_v22');
+      if (savedGlobalTf != null && _allTimeframes.contains(savedGlobalTf)) {
+        _globalTf = savedGlobalTf;
+      }
+      final tfMapRaw = widget.prefs.getString('inspector_coin_tf_map_v22');
+      if (tfMapRaw != null && tfMapRaw.isNotEmpty) {
+        final Map<String, dynamic> decoded = jsonDecode(tfMapRaw);
+        decoded.forEach((k, v) => _coinSelectedTf[k] = v.toString());
+      }
+      final stratMapRaw = widget.prefs.getString('inspector_coin_strat_map_v22');
+      if (stratMapRaw != null && stratMapRaw.isNotEmpty) {
+        final Map<String, dynamic> decoded = jsonDecode(stratMapRaw);
+        decoded.forEach((k, v) => _coinStrategyFilter[k] = v.toString());
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _saveInspectorState() async {
+    try {
+      await widget.prefs.setStringList('inspector_saved_symbols_v22', _inspectedSymbols);
+      await widget.prefs.setString('inspector_global_tf_v22', _globalTf);
+      await widget.prefs.setString('inspector_coin_tf_map_v22', jsonEncode(_coinSelectedTf));
+      await widget.prefs.setString('inspector_coin_strat_map_v22', jsonEncode(_coinStrategyFilter));
+    } catch (_) {}
+  }
+
+  Future<void> _loadAllSymbols({bool silent = false}) async {
+    if (!silent && _multiTfSignals.isEmpty) {
+      setState(() => _loading = true);
+    }
+    for (final sym in List<String>.from(_inspectedSymbols)) {
       _coinSelectedTf.putIfAbsent(sym, () => _globalTf);
       _coinStrategyFilter.putIfAbsent(sym, () => 'ALL');
       await _loadAllTimeframesForSymbol(sym);
-      await _runSingleCoinBacktest(sym);
+      await _runSingleCoinBacktest(sym, silent: silent);
     }
     if (mounted) setState(() => _loading = false);
   }
@@ -935,14 +1372,16 @@ class _Tab3ManualMultiCoinInspectorState extends State<Tab3ManualMultiCoinInspec
       }
       if (tfMap.isNotEmpty) {
         _multiTfSignals[sym] = tfMap;
+        _cachedMultiTfMemory[sym] = tfMap;
+        if (mounted) setState(() {});
       }
     } catch (_) {}
   }
 
-  Future<void> _runSingleCoinBacktest(String sym) async {
+  Future<void> _runSingleCoinBacktest(String sym, {bool silent = false}) async {
     final tf = _coinSelectedTf[sym] ?? _globalTf;
     final strat = _coinStrategyFilter[sym] ?? 'ALL';
-    if (mounted) {
+    if (mounted && (!silent || !_coinBacktests.containsKey(sym))) {
       setState(() => _coinBtRunning[sym] = true);
     }
     try {
@@ -952,6 +1391,7 @@ class _Tab3ManualMultiCoinInspectorState extends State<Tab3ManualMultiCoinInspec
         minScore: 78,
         strategyFilter: strat,
       );
+      _cachedBtMemory[sym] = rep;
       if (mounted) {
         setState(() {
           _coinBacktests[sym] = rep;
@@ -1013,11 +1453,10 @@ class _Tab3ManualMultiCoinInspectorState extends State<Tab3ManualMultiCoinInspec
                                 _inspectedSymbols.insert(0, sym);
                                 _coinSelectedTf[sym] = _globalTf;
                                 _coinStrategyFilter[sym] = 'ALL';
-                                _loading = true;
                               });
+                              await _saveInspectorState();
                               await _loadAllTimeframesForSymbol(sym);
                               await _runSingleCoinBacktest(sym);
-                              if (mounted) setState(() => _loading = false);
                             }
                           },
                         );
@@ -1094,7 +1533,7 @@ class _Tab3ManualMultiCoinInspectorState extends State<Tab3ManualMultiCoinInspec
             IconButton(
               tooltip: 'Rescan All Coins',
               icon: const Icon(Icons.refresh, color: Colors.cyanAccent, size: 20),
-              onPressed: _loadAllSymbols,
+              onPressed: () => _loadAllSymbols(silent: true),
             ),
             ElevatedButton.icon(
               style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00E676), foregroundColor: Colors.black, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
@@ -1134,6 +1573,7 @@ class _Tab3ManualMultiCoinInspectorState extends State<Tab3ManualMultiCoinInspec
                                 _coinSelectedTf[sym] = tf;
                               }
                             });
+                            _saveInspectorState();
                             for (final sym in _inspectedSymbols) {
                               _runSingleCoinBacktest(sym);
                             }
@@ -1238,7 +1678,9 @@ class _Tab3ManualMultiCoinInspectorState extends State<Tab3ManualMultiCoinInspec
                             setState(() {
                               _inspectedSymbols.remove(sym);
                               _multiTfSignals.remove(sym);
+                              _cachedMultiTfMemory.remove(sym);
                             });
+                            _saveInspectorState();
                           },
                         ),
                       ],
@@ -1266,6 +1708,7 @@ class _Tab3ManualMultiCoinInspectorState extends State<Tab3ManualMultiCoinInspec
                                   child: InkWell(
                                     onTap: () {
                                       setState(() => _coinSelectedTf[sym] = tf);
+                                      _saveInspectorState();
                                       _runSingleCoinBacktest(sym);
                                     },
                                     child: Container(
@@ -1330,7 +1773,11 @@ class _Tab3ManualMultiCoinInspectorState extends State<Tab3ManualMultiCoinInspec
                             _copyPricePill('TP3 (WIDE)', sig.tp3, dec, const Color(0xFF00E676)),
                           ],
                         ),
-                        const SizedBox(height: 8),
+                        const SizedBox(height: 6),
+                        Text('🕒 Signal: ${sig.launchedAgo}', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.amberAccent)),
+                        const SizedBox(height: 3),
+                        Text(sig.reversalFlipBrief, style: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.w500)),
+                        const SizedBox(height: 4),
                         Text(sig.entryAdvice, style: const TextStyle(fontSize: 10, color: Colors.white70)),
                         const SizedBox(height: 6),
                         Wrap(
@@ -1467,6 +1914,7 @@ class _Tab3ManualMultiCoinInspectorState extends State<Tab3ManualMultiCoinInspec
                                 child: InkWell(
                                   onTap: () {
                                     setState(() => _coinStrategyFilter[sym] = st['key']!);
+                                    _saveInspectorState();
                                     _runSingleCoinBacktest(sym);
                                   },
                                   child: Container(

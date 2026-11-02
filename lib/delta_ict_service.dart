@@ -697,8 +697,31 @@ class DeltaExchangeIctService {
             })
             .where((p) => (p['mark_price'] as double) > 0 && (p['symbol'] as String).isNotEmpty)
             .toList();
-        perps.sort((a, b) => (b['volume'] as double).compareTo(a['volume'] as double));
-        return perps;
+                // Hybrid Priority Queue: Combine Top 24h Gainers/Losers (>=3.5% move) + Top Volume Leaders so mid/low-cap pumps like ARIAUSD are never missed!
+        final List<Map<String, dynamic>> topMovers = List<Map<String, dynamic>>.from(perps)
+          ..sort((a, b) => ((b['change_24h_pct'] as double).abs()).compareTo((a['change_24h_pct'] as double).abs()));
+        final List<Map<String, dynamic>> byVol = List<Map<String, dynamic>>.from(perps)
+          ..sort((a, b) => (b['volume'] as double).compareTo(a['volume'] as double));
+
+        final Set<String> seen = {};
+        final List<Map<String, dynamic>> prioritized = [];
+
+        // First: Top 25 biggest 24h % movers (pumps & dumps like ARIAUSD)
+        for (final p in topMovers.take(25)) {
+          final s = p['symbol'] as String;
+          if (seen.add(s)) prioritized.add(p);
+        }
+        // Second: Top 30 highest volume liquid leaders (BTCUSD, ETHUSD, SOLUSD, etc.)
+        for (final p in byVol.take(30)) {
+          final s = p['symbol'] as String;
+          if (seen.add(s)) prioritized.add(p);
+        }
+        // Third: All remaining Delta perpetuals so the full market is covered
+        for (final p in byVol) {
+          final s = p['symbol'] as String;
+          if (seen.add(s)) prioritized.add(p);
+        }
+        return prioritized;
       }
     } catch (_) {}
     return [];
@@ -1585,7 +1608,7 @@ class DeltaExchangeIctService {
 
     // Calculate High-Velocity Pump / Dump Readiness (6-10+% breakout potential)
     final double expectedMove = max(6.2, min(14.5, (atr / markPrice) * 100.0 * 2.8));
-    final bool isReadyForBigMove = (rvol >= 1.6 || strategyExtras.hasUnicornSetup || strategyExtras.asianSwept) && score >= 85;
+    final bool isReadyForBigMove = (rvol >= 1.35 || strategyExtras.hasUnicornSetup || strategyExtras.asianSwept || expectedMove >= 6.5) && score >= 84;
 
     final double priceDiff = direction == 'LONG' ? (markPrice - sniperEntry) : (sniperEntry - markPrice);
     final double currentR = priceDiff / risk;
@@ -1644,8 +1667,8 @@ class DeltaExchangeIctService {
       isBigPumpOrDump: isReadyForBigMove,
       expectedMovePct: expectedMove,
       pumpDumpHeadline: '${direction == 'LONG' ? '⚡ READY TO PUMP' : '🔻 READY TO DUMP'} +${expectedMove.toStringAsFixed(1)}% (RVOL ${rvol.toStringAsFixed(1)}x)',
-      reversalFlipBrief: '${patternAnalysis.formedPattern} + ${strategyExtras.po3Phase}.',
-      launchedAgo: 'Launched: Just launched (Fresh ⚡) (${DateTime.now().hour.toString().padLeft(2, '0')}:${DateTime.now().minute.toString().padLeft(2, '0')})',
+      reversalFlipBrief: 'WHY ${direction == 'LONG' ? 'PUMP' : 'DUMP'} +${expectedMove.toStringAsFixed(1)}%: ${patternAnalysis.formedPattern} confirmed with ${rvol.toStringAsFixed(1)}x RVOL surge, ${strategyExtras.po3Phase}, and ${avwapState.stage} toward \$${tp3.toStringAsFixed(decimals)} liquidity pool.',
+      launchedAgo: resolveSignalDateAndTime(symbol: symbol, timeframe: timeframe, direction: direction, candles: candles),
       avwapState: avwapState,
       patternAnalysis: patternAnalysis,
       strategyExtras: strategyExtras,

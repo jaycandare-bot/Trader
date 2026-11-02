@@ -1,7 +1,7 @@
 name: delta_ict_terminal_v18
 description: "Elite Delta Exchange ICT Sniper Terminal v10 with Live Session Engine, Killzone Countdown & Chart Session Overlays."
 publish_to: "none"
-version: 20.0.0+1
+version: 22.0.0+1
 
 environment:
   sdk: ">=3.4.0 <4.0.0"

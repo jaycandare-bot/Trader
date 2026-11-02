@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'delta_ict_service.dart';
 
 class PaperTradeSlot {
@@ -35,11 +37,58 @@ class PaperTradeSlot {
         : (entryPrice - livePrice) / entryPrice;
     return marginUsd * leverage * pct;
   }
+
+  Map<String, dynamic> toJson() => {
+        'symbol': symbol,
+        'direction': direction,
+        'timeframe': timeframe,
+        'entryPrice': entryPrice,
+        'livePrice': livePrice,
+        'stopLoss': stopLoss,
+        'tp1': tp1,
+        'tp3': tp3,
+        'marginUsd': marginUsd,
+        'leverage': leverage,
+        'openedAt': openedAt.toIso8601String(),
+      };
+
+  factory PaperTradeSlot.fromJson(Map<String, dynamic> j) => PaperTradeSlot(
+        symbol: j['symbol']?.toString() ?? 'BTCUSD',
+        direction: j['direction']?.toString() ?? 'LONG',
+        timeframe: j['timeframe']?.toString() ?? '15m',
+        entryPrice: (j['entryPrice'] as num?)?.toDouble() ?? 0.0,
+        livePrice: (j['livePrice'] as num?)?.toDouble() ?? 0.0,
+        stopLoss: (j['stopLoss'] as num?)?.toDouble() ?? 0.0,
+        tp1: (j['tp1'] as num?)?.toDouble() ?? 0.0,
+        tp3: (j['tp3'] as num?)?.toDouble() ?? 0.0,
+        marginUsd: (j['marginUsd'] as num?)?.toDouble() ?? 150.0,
+        leverage: (j['leverage'] as num?)?.toDouble() ?? 10.0,
+        openedAt: DateTime.tryParse(j['openedAt']?.toString() ?? '') ?? DateTime.now(),
+      );
 }
 
 class PaperTradingService {
-  static Future<void> init() async {}
   static final List<PaperTradeSlot> activeSlots = [];
+
+  static Future<void> init() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('saved_demo_slots_v22');
+      if (raw != null && raw.isNotEmpty) {
+        final list = jsonDecode(raw) as List;
+        activeSlots
+          ..clear()
+          ..addAll(list.map((e) => PaperTradeSlot.fromJson(Map<String, dynamic>.from(e))));
+      }
+    } catch (_) {}
+  }
+
+  static Future<void> saveSlots() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('saved_demo_slots_v22', jsonEncode(activeSlots.map((s) => s.toJson()).toList()));
+    } catch (_) {}
+  }
 
   static bool addDemoSlot(IctSignal sig, {String timeframe = '15m'}) {
     if (activeSlots.any((s) => s.symbol == sig.symbol)) return false;
@@ -60,6 +109,7 @@ class PaperTradingService {
         openedAt: DateTime.now(),
       ),
     );
+    saveSlots();
     return true;
   }
 
@@ -71,7 +121,6 @@ class PaperTradingService {
     return sum;
   }
 }
-
 class PaperTradingLabScreen extends StatefulWidget {
   const PaperTradingLabScreen({super.key});
 
