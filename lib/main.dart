@@ -523,22 +523,21 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
       return null;
     }
 
-    // Unrestricted briefing based on Quad status
     String actionBrief = '';
     if (_currentQuad == 1) {
       actionBrief = direction == 'LONG'
-          ? 'QUAD 1 (Alt Season): Hold Long for full TP'
-          : 'QUAD 1 (Alt Season): Short setup. Move SL to BE.';
+          ? 'QUAD 1: Hold Long for full TP'
+          : 'QUAD 1: Short setup. Move SL to BE.';
     } else if (_currentQuad == 2) {
       actionBrief = isSmtStrong
-          ? 'QUAD 2 (Selective SMT): SMT Strong. Hold & Move SL to BE.'
-          : 'QUAD 2 (Selective SMT): Lagging. Trim 50% or close on bounce.';
+          ? 'QUAD 2: SMT Strong. Hold & Move SL to BE.'
+          : 'QUAD 2: Lagging alt. Trim 50% or close on bounce.';
     } else if (_currentQuad == 3) {
       actionBrief = direction == 'SHORT'
-          ? 'QUAD 3 (Alt Bleed): Short active. Hold or scale down to TP.'
-          : 'QUAD 3 (Alt Bleed): Long in danger! Close or set tight BE SL.';
+          ? 'QUAD 3: Alt Bleed Short active. Hold to TP.'
+          : 'QUAD 3: Long in danger! Close or set tight BE SL.';
     } else {
-      actionBrief = 'QUAD 4 (Defensive): Rotate to cash or secure profits immediately.';
+      actionBrief = 'QUAD 4: Defensive rotation. Secure profits immediately.';
     }
 
     confidence = confidence.clamp(75, 98);
@@ -1092,7 +1091,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
   }
 
   // ==========================================================================
-  // LIVE DELTA MARK PRICE CHART TAB (MOBILE OPTIMIZED)
+  // LIVE DELTA MARK PRICE CHART TAB (MOBILE OPTIMIZED & SEARCHABLE)
   // ==========================================================================
   Widget _buildLiveChartInspectorTab() {
     TradeSignal? activeSig;
@@ -1117,16 +1116,21 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
             children: [
               Expanded(
                 flex: 3,
-                child: DropdownButton<String>(
-                  value: currentDropdownVal,
-                  isExpanded: true,
-                  dropdownColor: const Color(0xFF171E2C),
-                  underline: const SizedBox(),
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.white),
-                  items: symbolDropdownOptions.map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis))).toList(),
-                  onChanged: (val) {
-                    if (val != null) _loadLiveChart(val, _selectedResolution);
-                  },
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    DropdownButton<String>(
+                      value: currentDropdownVal,
+                      isExpanded: true,
+                      dropdownColor: const Color(0xFF171E2C),
+                      underline: const SizedBox(),
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.white),
+                      items: symbolDropdownOptions.map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis))).toList(),
+                      onChanged: (val) {
+                        if (val != null) _loadLiveChart(val, _selectedResolution);
+                      },
+                    ),
+                  ],
                 ),
               ),
               const SizedBox(width: 4),
@@ -1167,6 +1171,22 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
             ],
           ),
         ),
+        // Manual search bar specifically for the live chart tab
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          color: const Color(0xFF10141D),
+          child: TextField(
+            onChanged: (v) => setState(() => _searchQuery = v),
+            decoration: InputDecoration(
+              hintText: 'Manual Search Coin (e.g. ETHUSD, SOLUSD)...',
+              prefixIcon: const Icon(Icons.search, size: 14),
+              isDense: true,
+              filled: true,
+              fillColor: const Color(0xFF171C26),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Colors.white24)),
+            ),
+          ),
+        ),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
           color: const Color(0xFF0E131A),
@@ -1179,7 +1199,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
               const Spacer(),
               Expanded(
                 child: Text(
-                  activeSig != null ? '🎯 ${activeSig.strategyName}' : '⚡ Scanning...',
+                  activeSig != null ? '🎯 ${activeSig.strategyName}' : '⚡ Patterns Active',
                   style: const TextStyle(fontSize: 10, color: Color(0xFF40C4FF), fontWeight: FontWeight.bold),
                   overflow: TextOverflow.ellipsis,
                   textAlign: TextAlign.right,
