@@ -364,7 +364,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
       }
 
       final List<TradeSignal> discoveredSignals = [];
-      const int batchSize = 12;
+      const int batchSize = 10;
 
       for (int i = 0; i < targetList.length; i += batchSize) {
         final batch = targetList.skip(i).take(batchSize).toList();
@@ -396,7 +396,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
           });
         }
 
-        await Future.delayed(const Duration(milliseconds: 150));
+        await Future.delayed(const Duration(milliseconds: 250));
       }
     } finally {
       if (mounted) {
@@ -523,7 +523,6 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
       return null;
     }
 
-    // Generate concise actionable brief based on Quadrant state
     String actionBrief = '';
     if (_currentQuad == 1) {
       actionBrief = direction == 'LONG'
@@ -593,7 +592,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
       candleCount: 50,
     );
 
-    final List<HtfZone> zones = _calculateHtfZones(htf1h);
+    final List<HtfZone> zones = _calculateHtfZones(htf1h, candles);
 
     if (mounted) {
       setState(() {
@@ -610,24 +609,40 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
     _connectDeltaWebSocket(symbol, resolution);
   }
 
-  List<HtfZone> _calculateHtfZones(List<Candle> htfCandles) {
+  List<HtfZone> _calculateHtfZones(List<Candle> htfCandles, List<Candle> currentCandles) {
     final List<HtfZone> zones = [];
-    if (htfCandles.length < 10) return zones;
+    
+    // 1. Calculate 1H Order Blocks & BOS
+    if (htfCandles.length >= 10) {
+      for (int i = 2; i < htfCandles.length; i++) {
+        final prev = htfCandles[i - 1];
+        final curr = htfCandles[i];
 
-    for (int i = 2; i < htfCandles.length; i++) {
-      final prev = htfCandles[i - 1];
-      final curr = htfCandles[i];
-
-      if (curr.close > curr.open && (curr.close - curr.open) > (prev.high - prev.low) * 1.2 && prev.close < prev.open) {
-        zones.add(HtfZone(top: prev.high, bottom: prev.low, label: '1H Bull OB', isBullish: true));
+        if (curr.close > curr.open && (curr.close - curr.open) > (prev.high - prev.low) * 1.2 && prev.close < prev.open) {
+          zones.add(HtfZone(top: prev.high, bottom: prev.low, label: '1H Bull OB', isBullish: true));
+        }
+        if (curr.close < curr.open && (curr.open - curr.close) > (prev.high - prev.low) * 1.2 && prev.close > prev.open) {
+          zones.add(HtfZone(top: prev.high, bottom: prev.low, label: '1H Bear OB', isBullish: false));
+        }
       }
-      if (curr.close < curr.open && (curr.open - curr.close) > (prev.high - prev.low) * 1.2 && prev.close > prev.open) {
-        zones.add(HtfZone(top: prev.high, bottom: prev.low, label: '1H Bear OB', isBullish: false));
-      }
+      final double recent1hHigh = htfCandles.sublist(htfCandles.length - 12, htfCandles.length - 1).map((c) => c.high).reduce(math.max);
+      zones.add(HtfZone(top: recent1hHigh, bottom: recent1hHigh, label: '1H BOS Level', isBullish: true));
     }
 
-    final double recent1hHigh = htfCandles.sublist(htfCandles.length - 12, htfCandles.length - 1).map((c) => c.high).reduce(math.max);
-    zones.add(HtfZone(top: recent1hHigh, bottom: recent1hHigh, label: '1H BOS Level', isBullish: true));
+    // 2. Calculate Local FVG (Fair Value Gaps) on Current Chart
+    if (currentCandles.length >= 5) {
+      for (int i = 2; i < currentCandles.length; i++) {
+        final c0 = currentCandles[i - 2];
+        final c1 = currentCandles[i - 1];
+        final c2 = currentCandles[i];
+
+        if (c2.low > c0.high && c1.close > c1.open) {
+          zones.add(HtfZone(top: c2.low, bottom: c0.high, label: 'FVG (Bull)', isBullish: true));
+        } else if (c2.high < c0.low && c1.close < c1.open) {
+          zones.add(HtfZone(top: c0.low, bottom: c2.high, label: 'FVG (Bear)', isBullish: false));
+        }
+      }
+    }
 
     return zones;
   }
@@ -1030,7 +1045,6 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
                 ],
               ),
               const SizedBox(height: 6),
-              // Actionable Brief explaining what to do based on Quad shift
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(6),
@@ -1077,7 +1091,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
   }
 
   // ==========================================================================
-  // LIVE DELTA MARK PRICE CHART TAB
+  // LIVE DELTA MARK PRICE CHART TAB (SHOWING ALL STRATEGIES & PATTERNS)
   // ==========================================================================
   Widget _buildLiveChartInspectorTab() {
     TradeSignal? activeSig;
@@ -1161,9 +1175,10 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
                 style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 13),
               ),
               const Spacer(),
-              const Text(
-                '⚡ 1H OB & BOS Active',
-                style: TextStyle(fontSize: 11, color: Color(0xFF40C4FF), fontWeight: FontWeight.bold),
+              Text(
+                activeSig != null ? '🎯 Active: ${activeSig.strategyName}' : '⚡ Scanning Active Patterns...',
+                style: const TextStyle(fontSize: 11, color: Color(0xFF40C4FF), fontWeight: FontWeight.bold),
+                overflow: TextOverflow.ellipsis,
               ),
             ],
           ),
@@ -1306,13 +1321,14 @@ class DeltaLiveChartPainter extends CustomPainter {
     final double candleSlotWidth = chartWidth / visible.length;
     final double bodyWidth = (candleSlotWidth * 0.68).clamp(2.0, 14.0);
 
+    // 1. Render HTF Zones & FVG Patterns
     for (final zone in htfZones) {
       final double topY = priceToY(zone.top);
       final double botY = priceToY(zone.bottom);
 
       if (zone.label.contains('BOS')) {
         final Paint bosPaint = Paint()
-          ..color = Colors.cyanAccent.withOpacity(0.6)
+          ..color = Colors.cyanAccent.withOpacity(0.7)
           ..strokeWidth = 1.2;
         canvas.drawLine(Offset(0, topY), Offset(chartWidth, topY), bosPaint);
         _drawText(canvas, zone.label, Offset(10, topY - 14), Colors.cyanAccent, 9, bold: true);
@@ -1320,19 +1336,20 @@ class DeltaLiveChartPainter extends CustomPainter {
         final Rect zoneRect = Rect.fromLTRB(0, topY, chartWidth, botY);
         canvas.drawRect(
           zoneRect,
-          Paint()..color = zone.isBullish ? const Color(0xFF00E676).withOpacity(0.06) : Colors.redAccent.withOpacity(0.06),
+          Paint()..color = zone.isBullish ? const Color(0xFF00E676).withOpacity(0.08) : Colors.redAccent.withOpacity(0.08),
         );
         _drawText(
           canvas,
           zone.label,
           Offset(12, topY + 2),
-          zone.isBullish ? const Color(0xFF00E676).withOpacity(0.8) : Colors.redAccent.withOpacity(0.8),
+          zone.isBullish ? const Color(0xFF00E676).withOpacity(0.9) : Colors.redAccent.withOpacity(0.9),
           9,
           bold: true,
         );
       }
     }
 
+    // 2. Draw Candlesticks
     for (int i = 0; i < visible.length; i++) {
       final c = visible[i];
       final bool isBull = c.close >= c.open;
@@ -1358,6 +1375,7 @@ class DeltaLiveChartPainter extends CustomPainter {
       );
     }
 
+    // 3. Draw Market Structure Swings (HH, HL, LH, LL)
     double? prevSwingHigh;
     double? prevSwingLow;
 
@@ -1388,12 +1406,15 @@ class DeltaLiveChartPainter extends CustomPainter {
       }
     }
 
+    // 4. Draw Active Strategy Entry, SL, TP1, TP2 Lines & Badges
     if (activeSignal != null) {
-      _drawHorizontalStrategyLine(canvas, chartWidth, priceToY(activeSignal!.entry), 'ENTRY ${activeSignal!.direction}', Colors.amber);
+      _drawHorizontalStrategyLine(canvas, chartWidth, priceToY(activeSignal!.entry), 'ENTRY (${activeSignal!.strategyName})', Colors.amber);
       _drawHorizontalStrategyLine(canvas, chartWidth, priceToY(activeSignal!.stopLoss), 'SL', Colors.redAccent);
       _drawHorizontalStrategyLine(canvas, chartWidth, priceToY(activeSignal!.tp1), 'TP1 (1:2)', const Color(0xFF00E676));
+      _drawHorizontalStrategyLine(canvas, chartWidth, priceToY(activeSignal!.tp2), 'TP2 (1:3.5)', Colors.cyanAccent);
     }
 
+    // 5. Live Mark Price Line
     if (liveMarkPrice > 0) {
       final double markY = priceToY(liveMarkPrice).clamp(0.0, chartHeight);
       canvas.drawLine(
@@ -1417,13 +1438,13 @@ class DeltaLiveChartPainter extends CustomPainter {
   }
 
   void _drawHorizontalStrategyLine(Canvas canvas, double chartWidth, double y, String label, Color color) {
-    canvas.drawLine(Offset(0, y), Offset(chartWidth, y), Paint()..color = color.withOpacity(0.85)..strokeWidth = 1.2);
+    canvas.drawLine(Offset(0, y), Offset(chartWidth, y), Paint()..color = color.withOpacity(0.9)..strokeWidth = 1.3);
     _drawText(canvas, label, Offset(8, y - 13), color, 10, bold: true);
   }
 
   void _drawTagBadge(Canvas canvas, String text, Offset pos, Color color) {
     final Rect box = Rect.fromLTWH(pos.dx, pos.dy, 22, 13);
-    canvas.drawRRect(RRect.fromRectAndRadius(box, const Radius.circular(3)), Paint()..color = color.withOpacity(0.18));
+    canvas.drawRRect(RRect.fromRectAndRadius(box, const Radius.circular(3)), Paint()..color = color.withOpacity(0.2));
     _drawText(canvas, text, Offset(pos.dx + 4, pos.dy + 1), color, 9, bold: true);
   }
 
