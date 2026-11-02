@@ -523,21 +523,22 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
       return null;
     }
 
+    // Unrestricted briefing based on Quad status
     String actionBrief = '';
     if (_currentQuad == 1) {
       actionBrief = direction == 'LONG'
-          ? 'QUAD 1: Hold Long for full TP (Alt Season active)'
-          : 'QUAD 1: Low short probability in Alt Season. Trim or Skip.';
+          ? 'QUAD 1 (Alt Season): Hold Long for full TP'
+          : 'QUAD 1 (Alt Season): Short setup. Move SL to BE.';
     } else if (_currentQuad == 2) {
       actionBrief = isSmtStrong
-          ? 'QUAD 2: SMT Strong. Hold Long, move SL to breakeven.'
-          : 'QUAD 2: Lagging alt in Selective SMT. Trim 50% or tighten SL.';
+          ? 'QUAD 2 (Selective SMT): SMT Strong. Hold & Move SL to BE.'
+          : 'QUAD 2 (Selective SMT): Lagging. Trim 50% or close on bounce.';
     } else if (_currentQuad == 3) {
       actionBrief = direction == 'SHORT'
-          ? 'QUAD 3: Alt Bleed Short active. Hold or scale down to TP.'
-          : 'QUAD 3: Danger for Longs! Trim 75% or exit on bounce.';
+          ? 'QUAD 3 (Alt Bleed): Short active. Hold or scale down to TP.'
+          : 'QUAD 3 (Alt Bleed): Long in danger! Close or set tight BE SL.';
     } else {
-      actionBrief = 'QUAD 4: Defensive rotation. Secure profits and cash out.';
+      actionBrief = 'QUAD 4 (Defensive): Rotate to cash or secure profits immediately.';
     }
 
     confidence = confidence.clamp(75, 98);
@@ -612,7 +613,6 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
   List<HtfZone> _calculateHtfZones(List<Candle> htfCandles, List<Candle> currentCandles) {
     final List<HtfZone> zones = [];
     
-    // 1. Calculate 1H Order Blocks & BOS
     if (htfCandles.length >= 10) {
       for (int i = 2; i < htfCandles.length; i++) {
         final prev = htfCandles[i - 1];
@@ -629,7 +629,6 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
       zones.add(HtfZone(top: recent1hHigh, bottom: recent1hHigh, label: '1H BOS Level', isBullish: true));
     }
 
-    // 2. Calculate Local FVG (Fair Value Gaps) on Current Chart
     if (currentCandles.length >= 5) {
       for (int i = 2; i < currentCandles.length; i++) {
         final c0 = currentCandles[i - 2];
@@ -775,34 +774,35 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
   }
 
   Widget _buildTopHeaderBar() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       child: Row(
         children: [
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
             decoration: BoxDecoration(
               color: const Color(0xFF11261F),
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: const Color(0xFF00E676).withOpacity(0.5)),
             ),
-            child: Text('\$${_capitalUsd.toInt()}', style: const TextStyle(color: Color(0xFF00E676), fontWeight: FontWeight.bold)),
+            child: Text('\$${_capitalUsd.toInt()}', style: const TextStyle(color: Color(0xFF00E676), fontWeight: FontWeight.bold, fontSize: 12)),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
             decoration: BoxDecoration(
               color: const Color(0xFF282111),
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: Colors.amber.withOpacity(0.5)),
             ),
-            child: Text('⚡ ${_leverage}x', style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
+            child: Text('⚡ ${_leverage}x', style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12)),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
           GestureDetector(
             onTap: () => setState(() => _autoAlert = !_autoAlert),
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
               decoration: BoxDecoration(
                 color: const Color(0xFF171C26),
                 borderRadius: BorderRadius.circular(20),
@@ -810,18 +810,18 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
               ),
               child: Row(
                 children: [
-                  Icon(Icons.notifications_active, size: 15, color: _autoAlert ? const Color(0xFF00E676) : Colors.white54),
+                  Icon(Icons.notifications_active, size: 14, color: _autoAlert ? const Color(0xFF00E676) : Colors.white54),
                   const SizedBox(width: 4),
-                  Text(_autoAlert ? 'ON' : 'OFF', style: const TextStyle(fontSize: 12)),
+                  Text(_autoAlert ? 'ON' : 'OFF', style: const TextStyle(fontSize: 11)),
                 ],
               ),
             ),
           ),
-          const Spacer(),
+          const SizedBox(width: 8),
           IconButton(
             icon: _isScanning
-                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                : const Icon(Icons.refresh, color: Colors.white70),
+                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.refresh, color: Colors.white70, size: 20),
             onPressed: _runBatchScanner,
           ),
         ],
@@ -831,35 +831,36 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
 
   Widget _buildKillzoneBanner() {
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      padding: const EdgeInsets.all(10),
+      margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+      padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(
         color: const Color(0xFF111823),
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(8),
         border: Border.all(color: const Color(0xFF00E676).withOpacity(0.25)),
       ),
       child: Column(
         children: [
           Row(
             children: [
-              const Icon(Icons.circle, size: 10, color: Color(0xFF00E676)),
-              const SizedBox(width: 6),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(color: const Color(0xFF0D2E22), borderRadius: BorderRadius.circular(6)),
-                child: Text('🔥 $_killzoneTitle', style: const TextStyle(color: Color(0xFF00E676), fontWeight: FontWeight.bold, fontSize: 11)),
+              const Icon(Icons.circle, size: 8, color: Color(0xFF00E676)),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  '🔥 $_killzoneTitle',
+                  style: const TextStyle(color: Color(0xFF00E676), fontWeight: FontWeight.bold, fontSize: 10),
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
-              const Spacer(),
-              Text(_istTimeStr, style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 13)),
+              Text(_istTimeStr, style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 11)),
             ],
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 4),
           Row(
             children: [
               Expanded(
-                child: Text('🎯 $_killzoneSubtitle', style: const TextStyle(fontSize: 11, color: Colors.white70), overflow: TextOverflow.ellipsis),
+                child: Text('🎯 $_killzoneSubtitle', style: const TextStyle(fontSize: 10, color: Colors.white70), overflow: TextOverflow.ellipsis),
               ),
-              Text('⏳ $_killzoneCountdown', style: const TextStyle(fontSize: 11, color: Color(0xFF40C4FF), fontWeight: FontWeight.w600)),
+              Text('⏳ $_killzoneCountdown', style: const TextStyle(fontSize: 10, color: Color(0xFF40C4FF), fontWeight: FontWeight.w600)),
             ],
           ),
         ],
@@ -874,7 +875,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
     if (_currentQuad == 4) quadColor = Colors.purpleAccent;
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: const BoxDecoration(
         color: Color(0xFF0E131D),
         border: Border(top: BorderSide(color: Colors.white12), bottom: BorderSide(color: Colors.white12)),
@@ -884,20 +885,20 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
         children: [
           Text(
             'BTC: \$${_btcPrice.toStringAsFixed(0)} (${_btcChange24h >= 0 ? '+' : ''}${_btcChange24h.toStringAsFixed(2)}%)',
-            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
           ),
           Text(
             'BTC.D: ${_btcDominance.toStringAsFixed(2)}%',
-            style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 13),
+            style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12),
           ),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
             decoration: BoxDecoration(
               color: quadColor.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(6),
+              borderRadius: BorderRadius.circular(4),
               border: Border.all(color: quadColor),
             ),
-            child: Text('QUAD $_currentQuad', style: TextStyle(color: quadColor, fontWeight: FontWeight.bold, fontSize: 12)),
+            child: Text('QUAD $_currentQuad', style: TextStyle(color: quadColor, fontWeight: FontWeight.bold, fontSize: 11)),
           ),
         ],
       ),
@@ -914,38 +915,38 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 4),
           child: Row(
             children: [
               Expanded(
                 child: TextField(
                   onChanged: (v) => setState(() => _searchQuery = v),
                   decoration: InputDecoration(
-                    hintText: 'Search across 150+ perp coins...',
-                    prefixIcon: const Icon(Icons.search, size: 18),
+                    hintText: 'Search 150+ perp coins...',
+                    prefixIcon: const Icon(Icons.search, size: 16),
                     isDense: true,
                     filled: true,
                     fillColor: const Color(0xFF141923),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: Colors.white24)),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Colors.white24)),
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
               GestureDetector(
                 onTap: () {
                   setState(() => _scanAll150Plus = !_scanAll150Plus);
                   _runBatchScanner();
                 },
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                   decoration: BoxDecoration(
                     color: _scanAll150Plus ? const Color(0xFF0D2E22) : const Color(0xFF171C26),
-                    borderRadius: BorderRadius.circular(10),
+                    borderRadius: BorderRadius.circular(8),
                     border: Border.all(color: _scanAll150Plus ? const Color(0xFF00E676) : Colors.white24),
                   ),
                   child: Text(
-                    '🌍 All 150+ ${_scanAll150Plus ? 'ON' : 'OFF'} (${_signals.length}/$_scannedCoinsCount)',
-                    style: const TextStyle(color: Color(0xFF00E676), fontWeight: FontWeight.bold, fontSize: 12),
+                    '🌍 All ${_scanAll150Plus ? 'ON' : 'OFF'} (${_signals.length}/$_scannedCoinsCount)',
+                    style: const TextStyle(color: Color(0xFF00E676), fontWeight: FontWeight.bold, fontSize: 11),
                   ),
                 ),
               ),
@@ -954,15 +955,15 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
         ),
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
           child: Row(
             children: [
               _buildFilterChip('ALL_75', 'All (>=75%) ($all75Count)'),
-              const SizedBox(width: 8),
-              _buildFilterChip('ELITE_85', '💎 Elite (>=85%) ($elite85Count)'),
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
+              _buildFilterChip('ELITE_85', '💎 Elite ($elite85Count)'),
+              const SizedBox(width: 6),
               _buildFilterChip('PULLBACKS', '🛡️ Pullbacks ($pullbackCount)'),
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
               _buildFilterChip('SHORTS', '🔻 Shorts ($shortCount)'),
             ],
           ),
@@ -972,17 +973,17 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
               ? Center(
                   child: TextButton.icon(
                     onPressed: _runBatchScanner,
-                    icon: const Icon(Icons.refresh, color: Color(0xFF00E676)),
+                    icon: const Icon(Icons.refresh, color: Color(0xFF00E676), size: 16),
                     label: Text(
                       _isScanning
                           ? 'Scanning Delta Exchange ($_scannedCoinsCount/$_totalCoinsToScan)...'
                           : 'No setups matching filter. Tap to rescan.',
-                      style: const TextStyle(color: Color(0xFF00E676)),
+                      style: const TextStyle(color: Color(0xFF00E676), fontSize: 12),
                     ),
                   ),
                 )
               : ListView.builder(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.all(10),
                   itemCount: list.length,
                   itemBuilder: (ctx, i) => _buildSignalCard(list[i]),
                 ),
@@ -994,7 +995,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
   Widget _buildFilterChip(String key, String label) {
     final bool selected = _selectedFilter == key;
     return ChoiceChip(
-      label: Text(label, style: const TextStyle(fontSize: 12)),
+      label: Text(label, style: const TextStyle(fontSize: 11)),
       selected: selected,
       selectedColor: const Color(0xFF1E88E5),
       backgroundColor: const Color(0xFF141923),
@@ -1009,42 +1010,42 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
 
     return Card(
       color: const Color(0xFF131822),
-      margin: const EdgeInsets.only(bottom: 10),
+      margin: const EdgeInsets.only(bottom: 8),
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
         side: BorderSide(color: dirColor.withOpacity(0.4)),
       ),
       child: InkWell(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
         onTap: () {
           setState(() => _bottomNavIndex = 2);
           _loadLiveChart(sig.symbol, _selectedResolution);
         },
         child: Padding(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.all(10),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
                 children: [
-                  Text(sig.symbol, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                  const SizedBox(width: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(color: dirColor.withOpacity(0.15), borderRadius: BorderRadius.circular(6)),
-                    child: Text('${sig.direction} • ${sig.confidence}%', style: TextStyle(color: dirColor, fontWeight: FontWeight.bold, fontSize: 12)),
-                  ),
+                  Text(sig.symbol, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
                   const SizedBox(width: 6),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(color: dirColor.withOpacity(0.15), borderRadius: BorderRadius.circular(4)),
+                    child: Text('${sig.direction} • ${sig.confidence}%', style: TextStyle(color: dirColor, fontWeight: FontWeight.bold, fontSize: 11)),
+                  ),
+                  const SizedBox(width: 4),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                     decoration: BoxDecoration(color: Colors.amber.withOpacity(0.2), borderRadius: BorderRadius.circular(4)),
-                    child: Text('QUAD ${sig.quadrant}', style: const TextStyle(color: Colors.amber, fontSize: 10, fontWeight: FontWeight.bold)),
+                    child: Text('Q${sig.quadrant}', style: const TextStyle(color: Colors.amber, fontSize: 10, fontWeight: FontWeight.bold)),
                   ),
                   const Spacer(),
-                  Text(timeStr, style: const TextStyle(fontSize: 11, color: Colors.white54)),
+                  Text(timeStr, style: const TextStyle(fontSize: 10, color: Colors.white54)),
                 ],
               ),
-              const SizedBox(height: 6),
+              const SizedBox(height: 4),
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(6),
@@ -1057,9 +1058,9 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
                   style: const TextStyle(fontSize: 11, color: Color(0xFF40C4FF), fontWeight: FontWeight.w600),
                 ),
               ),
-              const SizedBox(height: 6),
-              Text('${sig.strategyName}  •  Pattern: ${sig.patternTag}', style: const TextStyle(fontSize: 11, color: Colors.white70)),
-              const Divider(height: 14, color: Colors.white12),
+              const SizedBox(height: 4),
+              Text('${sig.strategyName}  •  ${sig.patternTag}', style: const TextStyle(fontSize: 10, color: Colors.white70)),
+              const Divider(height: 10, color: Colors.white12),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -1080,18 +1081,18 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: const TextStyle(fontSize: 10, color: Colors.white54)),
-        const SizedBox(height: 2),
+        Text(label, style: const TextStyle(fontSize: 9, color: Colors.white54)),
+        const SizedBox(height: 1),
         Text(
           val > 100 ? val.toStringAsFixed(2) : val.toStringAsFixed(4),
-          style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: color),
+          style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: color),
         ),
       ],
     );
   }
 
   // ==========================================================================
-  // LIVE DELTA MARK PRICE CHART TAB (SHOWING ALL STRATEGIES & PATTERNS)
+  // LIVE DELTA MARK PRICE CHART TAB (MOBILE OPTIMIZED)
   // ==========================================================================
   Widget _buildLiveChartInspectorTab() {
     TradeSignal? activeSig;
@@ -1110,55 +1111,56 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
     return Column(
       children: [
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
           color: const Color(0xFF131822),
           child: Row(
             children: [
               Expanded(
+                flex: 3,
                 child: DropdownButton<String>(
                   value: currentDropdownVal,
                   isExpanded: true,
                   dropdownColor: const Color(0xFF171E2C),
                   underline: const SizedBox(),
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.white),
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.white),
                   items: symbolDropdownOptions.map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis))).toList(),
                   onChanged: (val) {
                     if (val != null) _loadLiveChart(val, _selectedResolution);
                   },
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 4),
               for (final tf in ['15m', '1h', '4h'])
                 Padding(
-                  padding: const EdgeInsets.only(right: 4),
+                  padding: const EdgeInsets.only(right: 2),
                   child: InkWell(
                     onTap: () => _loadLiveChart(_selectedChartSymbol, tf),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
                       decoration: BoxDecoration(
                         color: _selectedResolution == tf ? const Color(0xFF2979FF) : Colors.transparent,
-                        borderRadius: BorderRadius.circular(6),
+                        borderRadius: BorderRadius.circular(4),
                       ),
-                      child: Text(tf, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                      child: Text(tf, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
                     ),
                   ),
                 ),
-              const Spacer(),
+              const SizedBox(width: 4),
               GestureDetector(
                 onTap: () {
                   setState(() => _useMarkPriceChart = !_useMarkPriceChart);
                   _loadLiveChart(_selectedChartSymbol, _selectedResolution);
                 },
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
                   decoration: BoxDecoration(
                     color: _useMarkPriceChart ? Colors.amber.withOpacity(0.2) : Colors.white10,
-                    borderRadius: BorderRadius.circular(6),
+                    borderRadius: BorderRadius.circular(4),
                     border: Border.all(color: _useMarkPriceChart ? Colors.amber : Colors.white24),
                   ),
                   child: Text(
                     _useMarkPriceChart ? 'MARK' : 'LAST',
-                    style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: _useMarkPriceChart ? Colors.amber : Colors.white70),
+                    style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: _useMarkPriceChart ? Colors.amber : Colors.white70),
                   ),
                 ),
               ),
@@ -1166,19 +1168,22 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
           ),
         ),
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
           color: const Color(0xFF0E131A),
           child: Row(
             children: [
               Text(
                 'Mark: \$${_liveMarkPrice > 100 ? _liveMarkPrice.toStringAsFixed(2) : _liveMarkPrice.toStringAsFixed(4)}',
-                style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 13),
+                style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12),
               ),
               const Spacer(),
-              Text(
-                activeSig != null ? '🎯 Active: ${activeSig.strategyName}' : '⚡ Scanning Active Patterns...',
-                style: const TextStyle(fontSize: 11, color: Color(0xFF40C4FF), fontWeight: FontWeight.bold),
-                overflow: TextOverflow.ellipsis,
+              Expanded(
+                child: Text(
+                  activeSig != null ? '🎯 ${activeSig.strategyName}' : '⚡ Scanning...',
+                  style: const TextStyle(fontSize: 10, color: Color(0xFF40C4FF), fontWeight: FontWeight.bold),
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.right,
+                ),
               ),
             ],
           ),
@@ -1187,7 +1192,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
           child: _isLoadingChart
               ? const Center(child: CircularProgressIndicator())
               : _chartCandles.isEmpty
-                  ? const Center(child: Text('No candle data available for this pair'))
+                  ? const Center(child: Text('No candle data available'))
                   : InteractiveDeltaChart(
                       candles: _chartCandles,
                       htfZones: _htfZones,
@@ -1219,7 +1224,7 @@ class InteractiveDeltaChart extends StatefulWidget {
 }
 
 class _InteractiveDeltaChartState extends State<InteractiveDeltaChart> {
-  int _visibleCount = 55;
+  int _visibleCount = 50;
   int _scrollOffset = 0;
 
   @override
@@ -1237,7 +1242,7 @@ class _InteractiveDeltaChartState extends State<InteractiveDeltaChart> {
       onScaleUpdate: (details) {
         if (details.scale != 1.0) {
           setState(() {
-            _visibleCount = (_visibleCount / details.scale).round().clamp(25, 110);
+            _visibleCount = (_visibleCount / details.scale).round().clamp(20, 100);
           });
         }
       },
@@ -1277,9 +1282,9 @@ class DeltaLiveChartPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     if (candles.isEmpty) return;
 
-    const double rightPriceAxisWidth = 66.0;
+    const double rightPriceAxisWidth = 60.0;
     final double chartWidth = size.width - rightPriceAxisWidth;
-    final double chartHeight = size.height - 24.0;
+    final double chartHeight = size.height - 20.0;
 
     final int endIdx = (candles.length - scrollOffset).clamp(1, candles.length);
     final int startIdx = math.max(0, endIdx - visibleCount);
@@ -1302,7 +1307,7 @@ class DeltaLiveChartPainter extends CustomPainter {
     double priceToY(double p) => chartHeight - ((p - minPrice) / priceRange) * chartHeight;
 
     final Paint gridPaint = Paint()
-      ..color = Colors.white.withOpacity(0.06)
+      ..color = Colors.white.withOpacity(0.05)
       ..strokeWidth = 1;
 
     for (int i = 1; i <= 5; i++) {
@@ -1312,16 +1317,15 @@ class DeltaLiveChartPainter extends CustomPainter {
       _drawText(
         canvas,
         priceAtY > 100 ? priceAtY.toStringAsFixed(1) : priceAtY.toStringAsFixed(4),
-        Offset(chartWidth + 6, y - 6),
+        Offset(chartWidth + 4, y - 5),
         Colors.white54,
-        10,
+        9,
       );
     }
 
     final double candleSlotWidth = chartWidth / visible.length;
-    final double bodyWidth = (candleSlotWidth * 0.68).clamp(2.0, 14.0);
+    final double bodyWidth = (candleSlotWidth * 0.65).clamp(2.0, 12.0);
 
-    // 1. Render HTF Zones & FVG Patterns
     for (final zone in htfZones) {
       final double topY = priceToY(zone.top);
       final double botY = priceToY(zone.bottom);
@@ -1329,9 +1333,9 @@ class DeltaLiveChartPainter extends CustomPainter {
       if (zone.label.contains('BOS')) {
         final Paint bosPaint = Paint()
           ..color = Colors.cyanAccent.withOpacity(0.7)
-          ..strokeWidth = 1.2;
+          ..strokeWidth = 1.0;
         canvas.drawLine(Offset(0, topY), Offset(chartWidth, topY), bosPaint);
-        _drawText(canvas, zone.label, Offset(10, topY - 14), Colors.cyanAccent, 9, bold: true);
+        _drawText(canvas, zone.label, Offset(6, topY - 12), Colors.cyanAccent, 8, bold: true);
       } else {
         final Rect zoneRect = Rect.fromLTRB(0, topY, chartWidth, botY);
         canvas.drawRect(
@@ -1341,15 +1345,14 @@ class DeltaLiveChartPainter extends CustomPainter {
         _drawText(
           canvas,
           zone.label,
-          Offset(12, topY + 2),
+          Offset(8, topY + 2),
           zone.isBullish ? const Color(0xFF00E676).withOpacity(0.9) : Colors.redAccent.withOpacity(0.9),
-          9,
+          8,
           bold: true,
         );
       }
     }
 
-    // 2. Draw Candlesticks
     for (int i = 0; i < visible.length; i++) {
       final c = visible[i];
       final bool isBull = c.close >= c.open;
@@ -1364,18 +1367,17 @@ class DeltaLiveChartPainter extends CustomPainter {
       canvas.drawLine(
         Offset(centerX, highY),
         Offset(centerX, lowY),
-        Paint()..color = color..strokeWidth = 1.2,
+        Paint()..color = color..strokeWidth = 1.0,
       );
 
       final double top = math.min(openY, closeY);
       final double bottom = math.max(openY, closeY);
       canvas.drawRect(
-        Rect.fromLTRB(centerX - bodyWidth / 2, top, centerX + bodyWidth / 2, math.max(top + 1.5, bottom)),
+        Rect.fromLTRB(centerX - bodyWidth / 2, top, centerX + bodyWidth / 2, math.max(top + 1.2, bottom)),
         Paint()..color = color,
       );
     }
 
-    // 3. Draw Market Structure Swings (HH, HL, LH, LL)
     double? prevSwingHigh;
     double? prevSwingLow;
 
@@ -1396,17 +1398,16 @@ class DeltaLiveChartPainter extends CustomPainter {
       if (isPivotHigh) {
         final String tag = (prevSwingHigh == null || c.high >= prevSwingHigh) ? 'HH' : 'LH';
         prevSwingHigh = c.high;
-        final double y = priceToY(c.high) - 14;
-        _drawTagBadge(canvas, tag, Offset(centerX - 10, y), tag == 'HH' ? const Color(0xFF00E676) : Colors.orangeAccent);
+        final double y = priceToY(c.high) - 12;
+        _drawTagBadge(canvas, tag, Offset(centerX - 9, y), tag == 'HH' ? const Color(0xFF00E676) : Colors.orangeAccent);
       } else if (isPivotLow) {
         final String tag = (prevSwingLow == null || c.low >= prevSwingLow) ? 'HL' : 'LL';
         prevSwingLow = c.low;
-        final double y = priceToY(c.low) + 4;
-        _drawTagBadge(canvas, tag, Offset(centerX - 10, y), tag == 'HL' ? Colors.cyanAccent : Colors.redAccent);
+        final double y = priceToY(c.low) + 3;
+        _drawTagBadge(canvas, tag, Offset(centerX - 9, y), tag == 'HL' ? Colors.cyanAccent : Colors.redAccent);
       }
     }
 
-    // 4. Draw Active Strategy Entry, SL, TP1, TP2 Lines & Badges
     if (activeSignal != null) {
       _drawHorizontalStrategyLine(canvas, chartWidth, priceToY(activeSignal!.entry), 'ENTRY (${activeSignal!.strategyName})', Colors.amber);
       _drawHorizontalStrategyLine(canvas, chartWidth, priceToY(activeSignal!.stopLoss), 'SL', Colors.redAccent);
@@ -1414,38 +1415,37 @@ class DeltaLiveChartPainter extends CustomPainter {
       _drawHorizontalStrategyLine(canvas, chartWidth, priceToY(activeSignal!.tp2), 'TP2 (1:3.5)', Colors.cyanAccent);
     }
 
-    // 5. Live Mark Price Line
     if (liveMarkPrice > 0) {
       final double markY = priceToY(liveMarkPrice).clamp(0.0, chartHeight);
       canvas.drawLine(
         Offset(0, markY),
         Offset(chartWidth, markY),
-        Paint()..color = Colors.amber..strokeWidth = 1.2,
+        Paint()..color = Colors.amber..strokeWidth = 1.0,
       );
       canvas.drawRRect(
-        RRect.fromRectAndRadius(Rect.fromLTWH(chartWidth + 2, markY - 9, rightPriceAxisWidth - 4, 18), const Radius.circular(4)),
+        RRect.fromRectAndRadius(Rect.fromLTWH(chartWidth + 2, markY - 8, rightPriceAxisWidth - 4, 16), const Radius.circular(3)),
         Paint()..color = Colors.amber,
       );
       _drawText(
         canvas,
         liveMarkPrice > 100 ? liveMarkPrice.toStringAsFixed(1) : liveMarkPrice.toStringAsFixed(4),
-        Offset(chartWidth + 5, markY - 6),
+        Offset(chartWidth + 4, markY - 5),
         Colors.black,
-        10,
+        9,
         bold: true,
       );
     }
   }
 
   void _drawHorizontalStrategyLine(Canvas canvas, double chartWidth, double y, String label, Color color) {
-    canvas.drawLine(Offset(0, y), Offset(chartWidth, y), Paint()..color = color.withOpacity(0.9)..strokeWidth = 1.3);
-    _drawText(canvas, label, Offset(8, y - 13), color, 10, bold: true);
+    canvas.drawLine(Offset(0, y), Offset(chartWidth, y), Paint()..color = color.withOpacity(0.9)..strokeWidth = 1.1);
+    _drawText(canvas, label, Offset(6, y - 12), color, 9, bold: true);
   }
 
   void _drawTagBadge(Canvas canvas, String text, Offset pos, Color color) {
-    final Rect box = Rect.fromLTWH(pos.dx, pos.dy, 22, 13);
-    canvas.drawRRect(RRect.fromRectAndRadius(box, const Radius.circular(3)), Paint()..color = color.withOpacity(0.2));
-    _drawText(canvas, text, Offset(pos.dx + 4, pos.dy + 1), color, 9, bold: true);
+    final Rect box = Rect.fromLTWH(pos.dx, pos.dy, 18, 11);
+    canvas.drawRRect(RRect.fromRectAndRadius(box, const Radius.circular(2)), Paint()..color = color.withOpacity(0.2));
+    _drawText(canvas, text, Offset(pos.dx + 3, pos.dy), color, 8, bold: true);
   }
 
   void _drawText(Canvas canvas, String text, Offset pos, Color color, double fontSize, {bool bold = false}) {
