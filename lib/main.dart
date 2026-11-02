@@ -22,7 +22,7 @@ class DeltaIctTerminalV9App extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Delta ICT Terminal v23',
+      title: 'Delta ICT Terminal v24',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color(0xFF090D14),
