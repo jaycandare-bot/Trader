@@ -65,29 +65,13 @@ class Candle {
   }
 }
 
-class SwingPoint {
-  final int index;
-  final double price;
-  final String label; // HH, HL, LH, LL
-  final bool isHigh;
-
-  SwingPoint({
-    required this.index,
-    required this.price,
-    required this.label,
-    required this.isHigh,
-  });
-}
-
-class ChartZone {
-  final int startIndex;
+class HtfZone {
   final double top;
   final double bottom;
-  final String label; // Bullish FVG, Bearish FVG, Bull OB, Bear OB
+  final String label; // 1H Bull OB, 1H Bear OB, 1H BOS
   final bool isBullish;
 
-  ChartZone({
-    required this.startIndex,
+  HtfZone({
     required this.top,
     required this.bottom,
     required this.label,
@@ -146,36 +130,35 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
 
   int _bottomNavIndex = 0;
   bool _scanAll150Plus = true;
-  String _selectedFilter = 'ALL_75'; // ALL_75, ELITE_85, PULLBACKS, SHORTS
+  String _selectedFilter = 'ALL_75';
   String _searchQuery = '';
 
-  // Account & Risk Settings
   double _capitalUsd = 190.0;
   int _leverage = 10;
   bool _autoAlert = false;
 
-  // Macro & Clock State
   double _btcPrice = 77395.0;
   double _btcChange24h = -1.25;
   double _btcDominance = 58.40;
-  int _currentQuad = 3; // 1, 2, 3, 4
+  int _currentQuad = 3;
   String _istTimeStr = '';
   String _killzoneTitle = '';
   String _killzoneSubtitle = '';
   String _killzoneCountdown = '';
 
-  // Scanner State (Fixed (0/0) bug)
   bool _isScanning = false;
   int _scannedCoinsCount = 0;
   int _totalCoinsToScan = 0;
   List<String> _allPerpSymbols = [];
   List<TradeSignal> _signals = [];
 
-  // Inspector / Live Chart State
+  // Inspector / Live Chart State (with 1H HTF Overlays)
   String _selectedChartSymbol = 'BTCUSD';
   String _selectedResolution = '15m';
-  bool _useMarkPriceChart = true; // True = MARK:SYMBOL, False = Last Price
+  bool _useMarkPriceChart = true;
   List<Candle> _chartCandles = [];
+  List<Candle> _htf1hCandles = [];
+  List<HtfZone> _htfZones = [];
   bool _isLoadingChart = false;
   double _liveMarkPrice = 0.0;
   double _liveLastPrice = 0.0;
@@ -219,9 +202,6 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
     });
   }
 
-  // ==========================================================================
-  // 1. ACCURATE IST CLOCK & ICT KILLZONE ENGINE (Fixes 15:46 IST NY AM bug)
-  // ==========================================================================
   void _updateIstClockAndKillzone() {
     final nowUtc = DateTime.now().toUtc();
     final istNow = nowUtc.add(const Duration(hours: 5, minutes: 30));
@@ -229,44 +209,33 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
     final hh = istNow.hour.toString().padLeft(2, '0');
     final mm = istNow.minute.toString().padLeft(2, '0');
     final ss = istNow.second.toString().padLeft(2, '0');
-
     final totalMinutes = istNow.hour * 60 + istNow.minute;
 
     String title = 'INSTITUTIONAL MACRO ACCUMULATION';
     String sub = 'High-Probability 85%+ Unicorn & FVG Sniper';
     int minutesRemaining = 0;
 
-    // Asian Killzone: 05:30 IST - 09:30 IST (330 - 570)
     if (totalMinutes >= 330 && totalMinutes < 570) {
       title = 'ASIAN KILLZONE SESSION';
       sub = 'Liquidity Build & Range High/Low Sweep';
       minutesRemaining = 570 - totalMinutes;
-    }
-    // London Open / Silver Bullet: 13:30 IST - 16:30 IST (810 - 990)
-    else if (totalMinutes >= 810 && totalMinutes < 990) {
+    } else if (totalMinutes >= 810 && totalMinutes < 990) {
       title = 'LONDON SILVER BULLET';
       sub = 'High-Probability 85%+ Unicorn & FVG Sniper';
       minutesRemaining = 990 - totalMinutes;
-    }
-    // NY Open Killzone: 18:00 IST - 19:30 IST (1080 - 1170)
-    else if (totalMinutes >= 1080 && totalMinutes < 1170) {
+    } else if (totalMinutes >= 1080 && totalMinutes < 1170) {
       title = 'NEW YORK OPEN KILLZONE';
       sub = 'CME Open Manipulation & Judas Swing';
       minutesRemaining = 1170 - totalMinutes;
-    }
-    // NY AM Silver Bullet: 19:30 IST - 20:30 IST (1170 - 1230)
-    else if (totalMinutes >= 1170 && totalMinutes < 1230) {
+    } else if (totalMinutes >= 1170 && totalMinutes < 1230) {
       title = 'NY AM SILVER BULLET';
       sub = 'High-Probability 85%+ Unicorn & FVG Sniper';
       minutesRemaining = 1230 - totalMinutes;
-    }
-    // NY PM Silver Bullet: 23:30 IST - 00:30 IST
-    else if (totalMinutes >= 1410 || totalMinutes < 30) {
+    } else if (totalMinutes >= 1410 || totalMinutes < 30) {
       title = 'NY PM SILVER BULLET';
       sub = 'Late Session Liquidity Raid & Reversal';
       minutesRemaining = totalMinutes >= 1410 ? (1470 - totalMinutes) : (30 - totalMinutes);
     } else {
-      // Calculate countdown to next major Silver Bullet
       if (totalMinutes < 810) {
         minutesRemaining = 810 - totalMinutes;
       } else if (totalMinutes < 1170) {
@@ -290,14 +259,9 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
     }
   }
 
-  // ==========================================================================
-  // 2. FETCH DELTA EXCHANGE PERPETUAL SYMBOLS & TICKERS
-  // ==========================================================================
   Future<void> _fetchPerpetualSymbols() async {
     try {
-      final res = await http
-          .get(Uri.parse('$baseUrl/v2/tickers'))
-          .timeout(const Duration(seconds: 8));
+      final res = await http.get(Uri.parse('$baseUrl/v2/tickers')).timeout(const Duration(seconds: 8));
       if (res.statusCode == 200) {
         final data = jsonDecode(res.body);
         final List list = data['result'] ?? [];
@@ -306,8 +270,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
         for (final item in list) {
           final sym = item['symbol']?.toString() ?? '';
           final contractType = item['contract_type']?.toString() ?? '';
-          if (contractType == 'perpetual_futures' ||
-              (sym.endsWith('USD') && !sym.contains('-'))) {
+          if (contractType == 'perpetual_futures' || (sym.endsWith('USD') && !sym.contains('-'))) {
             perpSymbols.add(sym);
           }
         }
@@ -328,9 +291,6 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
     }
   }
 
-  // ==========================================================================
-  // 3. SAFE CHUNKED SCANNER LOOP (Fixes 0/0 Crash & 5:45 AM Freeze)
-  // ==========================================================================
   Future<void> _runBatchScanner() async {
     if (_isScanning) return;
 
@@ -345,12 +305,9 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
     });
 
     try {
-      // 1. Fetch all live tickers in a single lightweight call first
       final Map<String, Map<String, dynamic>> tickerMap = {};
       try {
-        final tickerRes = await http
-            .get(Uri.parse('$baseUrl/v2/tickers'))
-            .timeout(const Duration(seconds: 8));
+        final tickerRes = await http.get(Uri.parse('$baseUrl/v2/tickers')).timeout(const Duration(seconds: 8));
         if (tickerRes.statusCode == 200) {
           final List results = jsonDecode(tickerRes.body)['result'] ?? [];
           for (final t in results) {
@@ -360,7 +317,6 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
         }
       } catch (_) {}
 
-      // Update BTC Price & Macro Quadrant
       double btcChange = _btcChange24h;
       if (tickerMap.containsKey('BTCUSD')) {
         final btcT = tickerMap['BTCUSD']!;
@@ -374,7 +330,6 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
         }
       }
 
-      // Compute relative alt performance to estimate BTC.D direction & Quadrant
       int greenAlts = 0;
       int totalCheckedAlts = 0;
       for (final sym in _coreSymbols) {
@@ -392,21 +347,18 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
       }
 
       final bool btcUp = _btcChange24h >= 0;
-      final bool btcDomUp = totalCheckedAlts == 0
-          ? true
-          : (greenAlts / totalCheckedAlts) < 0.45;
+      final bool btcDomUp = totalCheckedAlts == 0 ? true : (greenAlts / totalCheckedAlts) < 0.45;
 
       if (btcUp && !btcDomUp) {
-        _currentQuad = 1; // BTC Up + BTC.D Down -> Alt Season Longs
+        _currentQuad = 1;
       } else if (btcUp && btcDomUp) {
-        _currentQuad = 2; // BTC Up + BTC.D Up -> Selective SMT Longs
+        _currentQuad = 2;
       } else if (!btcUp && btcDomUp) {
-        _currentQuad = 3; // BTC Down + BTC.D Up -> Alt Bleed Short
+        _currentQuad = 3;
       } else {
-        _currentQuad = 4; // BTC Down + BTC.D Down -> Defensive Rotation
+        _currentQuad = 4;
       }
 
-      // 2. Scan candles in safe batches of 12 to prevent HTTP 429 rate limits
       final List<TradeSignal> discoveredSignals = [];
       const int batchSize = 12;
 
@@ -425,9 +377,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
               final ticker = tickerMap[sym];
               return _evaluateIctSignal(sym, candles, ticker);
             }
-          } catch (_) {
-            // Never let a single failed symbol break the entire batch
-          }
+          } catch (_) {}
           return null;
         }));
 
@@ -438,12 +388,10 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
         if (mounted) {
           setState(() {
             _scannedCoinsCount = math.min(i + batch.length, targetList.length);
-            _signals = List.from(discoveredSignals)
-              ..sort((a, b) => b.confidence.compareTo(a.confidence));
+            _signals = List.from(discoveredSignals)..sort((a, b) => b.confidence.compareTo(a.confidence));
           });
         }
 
-        // 200ms breather prevents Delta Exchange API 429 block
         await Future.delayed(const Duration(milliseconds: 200));
       }
     } finally {
@@ -455,9 +403,6 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
     }
   }
 
-  // ==========================================================================
-  // 4. FETCH DELTA CANDLES (ALWAYS FRESH TIMESTAMPS & ASCENDING SORT)
-  // ==========================================================================
   Future<List<Candle>> _fetchCandlesForSymbol({
     required String symbol,
     required String resolution,
@@ -478,11 +423,8 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
 
     final decoded = jsonDecode(response.body);
     final List rawList = decoded['result'] ?? [];
-    final List<Candle> candles =
-        rawList.map((e) => Candle.fromJson(e)).toList();
+    final List<Candle> candles = rawList.map((e) => Candle.fromJson(e)).toList();
 
-    // CRITICAL FIX FOR 5:45 AM FREEZE:
-    // Always sort ascending by timestamp so candles.last is the LIVE candle!
     candles.sort((a, b) => a.time.compareTo(b.time));
     return candles;
   }
@@ -504,9 +446,6 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
     }
   }
 
-  // ==========================================================================
-  // 5. ICT UNICORN / FVG / SMT / QUADRANT SIGNAL ENGINE
-  // ==========================================================================
   TradeSignal? _evaluateIctSignal(
     String symbol,
     List<Candle> candles,
@@ -516,38 +455,21 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
     final Candle prev1 = candles[candles.length - 2];
     final Candle prev2 = candles[candles.length - 3];
 
-    final double markPrice =
-        double.tryParse(ticker?['mark_price']?.toString() ?? '') ??
-            latest.close;
-    final double open24 =
-        double.tryParse(ticker?['open']?.toString() ?? '') ?? candles.first.open;
-    final double change24h =
-        open24 > 0 ? ((markPrice - open24) / open24) * 100.0 : 0.0;
+    final double markPrice = double.tryParse(ticker?['mark_price']?.toString() ?? '') ?? latest.close;
+    final double open24 = double.tryParse(ticker?['open']?.toString() ?? '') ?? candles.first.open;
+    final double change24h = open24 > 0 ? ((markPrice - open24) / open24) * 100.0 : 0.0;
 
-    // Check SMT Divergence vs BTC
     final bool isSmtStrong = change24h > (_btcChange24h + 1.2);
 
-    // Recent 15-candle structure high/low
-    double recentHigh = candles
-        .sublist(candles.length - 15, candles.length - 1)
-        .map((c) => c.high)
-        .reduce(math.max);
-    double recentLow = candles
-        .sublist(candles.length - 15, candles.length - 1)
-        .map((c) => c.low)
-        .reduce(math.min);
+    double recentHigh = candles.sublist(candles.length - 15, candles.length - 1).map((c) => c.high).reduce(math.max);
+    double recentLow = candles.sublist(candles.length - 15, candles.length - 1).map((c) => c.low).reduce(math.min);
 
-    // Detect Bullish & Bearish FVG (Fair Value Gap)
     final bool bullishFvg = latest.low > prev2.high && prev1.close > prev1.open;
     final bool bearishFvg = latest.high < prev2.low && prev1.close < prev1.open;
 
-    // Detect Liquidity Sweep + Displacement (ICT Unicorn / Turtle Soup)
-    final bool bullishSweep =
-        prev1.low <= recentLow && latest.close > prev1.high;
-    final bool bearishSweep =
-        prev1.high >= recentHigh && latest.close < prev1.low;
+    final bool bullishSweep = prev1.low <= recentLow && latest.close > prev1.high;
+    final bool bearishSweep = prev1.high >= recentHigh && latest.close < prev1.low;
 
-    // Detect Structure Break (BOS / CHoCH)
     final bool bullishBos = latest.close > recentHigh;
     final bool bearishBos = latest.close < recentLow;
 
@@ -597,20 +519,11 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
       return null;
     }
 
-    // Apply QUAD 1-4 Institutional Rules without zeroing out valid trades
     if (_currentQuad == 3) {
-      // QUAD 3: Prioritize Shorts OR Selective SMT Strong Longs
-      if (direction == 'LONG' && !isSmtStrong && confidence < 86) {
-        return null;
-      }
-      if (direction == 'SHORT') {
-        confidence = math.min(96, confidence + 4);
-      }
+      if (direction == 'LONG' && !isSmtStrong && confidence < 86) return null;
+      if (direction == 'SHORT') confidence = math.min(96, confidence + 4);
     } else if (_currentQuad == 2) {
-      // QUAD 2: Selective SMT Longs
-      if (direction == 'LONG' && !isSmtStrong) {
-        confidence -= 4;
-      }
+      if (direction == 'LONG' && !isSmtStrong) confidence -= 4;
     }
 
     confidence = confidence.clamp(75, 98);
@@ -643,7 +556,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
   }
 
   // ==========================================================================
-  // 6. REAL-TIME DELTA EXCHANGE MARK PRICE CHART + WEBSOCKET STREAM
+  // LOAD LIVE CHART & 1H HTF ORDER BLOCKS / BOS
   // ==========================================================================
   Future<void> _loadLiveChart(String symbol, String resolution) async {
     setState(() {
@@ -659,9 +572,22 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
       candleCount: 120,
     );
 
+    // Fetch higher timeframe 1h candles for HTF OB & BOS Overlays
+    final htf1h = await _fetchCandlesForSymbol(
+      symbol: symbol,
+      resolution: '1h',
+      useMarkPrice: _useMarkPriceChart,
+      candleCount: 50,
+    );
+
+    // Compute 1H HTF Order Blocks and BOS
+    final List<HtfZone> zones = _calculateHtfZones(htf1h);
+
     if (mounted) {
       setState(() {
         _chartCandles = candles;
+        _htf1hCandles = htf1h;
+        _htfZones = zones;
         if (candles.isNotEmpty) {
           _liveMarkPrice = candles.last.close;
         }
@@ -670,6 +596,47 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
     }
 
     _connectDeltaWebSocket(symbol, resolution);
+  }
+
+  List<HtfZone> _calculateHtfZones(List<Candle> htfCandles) {
+    final List<HtfZone> zones = [];
+    if (htfCandles.length < 10) return zones;
+
+    for (int i = 2; i < htfCandles.length; i++) {
+      final prev = htfCandles[i - 1];
+      final curr = htfCandles[i];
+
+      // Bullish OB: Last down candle before strong bullish expansion
+      if (curr.close > curr.open && (curr.close - curr.open) > (prev.high - prev.low) * 1.2 && prev.close < prev.open) {
+        zones.add(HtfZone(
+          top: prev.high,
+          bottom: prev.low,
+          label: '1H Bull OB',
+          isBullish: true,
+        ));
+      }
+
+      // Bearish OB: Last up candle before strong bearish breakdown
+      if (curr.close < curr.open && (curr.open - curr.close) > (prev.high - prev.low) * 1.2 && prev.close > prev.open) {
+        zones.add(HtfZone(
+          top: prev.high,
+          bottom: prev.low,
+          label: '1H Bear OB',
+          isBullish: false,
+        ));
+      }
+    }
+
+    // Add 1H BOS (Break of Structure) line from recent significant 1h swing
+    final double recent1hHigh = htfCandles.sublist(htfCandles.length - 12, htfCandles.length - 1).map((c) => c.high).reduce(math.max);
+    zones.add(HtfZone(
+      top: recent1hHigh,
+      bottom: recent1hHigh,
+      label: '1H BOS Level',
+      isBullish: true,
+    ));
+
+    return zones;
   }
 
   void _connectDeltaWebSocket(String symbol, String resolution) {
@@ -719,12 +686,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
             final double? low = (msg['low'] as num?)?.toDouble();
             final double? close = (msg['close'] as num?)?.toDouble();
 
-            if (startTs != null &&
-                open != null &&
-                high != null &&
-                low != null &&
-                close != null &&
-                mounted) {
+            if (startTs != null && open != null && high != null && low != null && close != null && mounted) {
               setState(() {
                 _liveMarkPrice = close;
                 if (_chartCandles.isEmpty) return;
@@ -751,13 +713,9 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
     } catch (_) {}
   }
 
-  // ==========================================================================
-  // UI BUILDERS
-  // ==========================================================================
   List<TradeSignal> get _filteredSignals {
     return _signals.where((s) {
-      if (_searchQuery.isNotEmpty &&
-          !s.symbol.toUpperCase().contains(_searchQuery.toUpperCase())) {
+      if (_searchQuery.isNotEmpty && !s.symbol.toUpperCase().contains(_searchQuery.toUpperCase())) {
         return false;
       }
       if (_selectedFilter == 'ELITE_85') return s.confidence >= 85;
@@ -777,9 +735,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
             _buildKillzoneBanner(),
             _buildMacroRegimeBanner(),
             Expanded(
-              child: _bottomNavIndex == 2
-                  ? _buildLiveChartInspectorTab()
-                  : _buildScannerTab(),
+              child: _bottomNavIndex == 2 ? _buildLiveChartInspectorTab() : _buildScannerTab(),
             ),
           ],
         ),
@@ -816,13 +772,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: const Color(0xFF00E676).withOpacity(0.5)),
             ),
-            child: Text(
-              '\$${_capitalUsd.toInt()}',
-              style: const TextStyle(
-                color: Color(0xFF00E676),
-                fontWeight: FontWeight.bold,
-              ),
-            ),
+            child: Text('\$${_capitalUsd.toInt()}', style: const TextStyle(color: Color(0xFF00E676), fontWeight: FontWeight.bold)),
           ),
           const SizedBox(width: 8),
           Container(
@@ -832,13 +782,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: Colors.amber.withOpacity(0.5)),
             ),
-            child: Text(
-              '⚡ ${_leverage}x',
-              style: const TextStyle(
-                color: Colors.amber,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
+            child: Text('⚡ ${_leverage}x', style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
           ),
           const SizedBox(width: 8),
           GestureDetector(
@@ -852,16 +796,9 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
               ),
               child: Row(
                 children: [
-                  Icon(
-                    Icons.notifications_active,
-                    size: 15,
-                    color: _autoAlert ? const Color(0xFF00E676) : Colors.white54,
-                  ),
+                  Icon(Icons.notifications_active, size: 15, color: _autoAlert ? const Color(0xFF00E676) : Colors.white54),
                   const SizedBox(width: 4),
-                  Text(
-                    _autoAlert ? 'ON' : 'OFF',
-                    style: const TextStyle(fontSize: 12),
-                  ),
+                  Text(_autoAlert ? 'ON' : 'OFF', style: const TextStyle(fontSize: 12)),
                 ],
               ),
             ),
@@ -869,11 +806,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
           const Spacer(),
           IconButton(
             icon: _isScanning
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
+                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.refresh, color: Colors.white70),
             onPressed: _runBatchScanner,
           ),
@@ -899,48 +832,20 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
               const SizedBox(width: 6),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF0D2E22),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text(
-                  '🔥 $_killzoneTitle',
-                  style: const TextStyle(
-                    color: Color(0xFF00E676),
-                    fontWeight: FontWeight.bold,
-                    fontSize: 11,
-                  ),
-                ),
+                decoration: BoxDecoration(color: const Color(0xFF0D2E22), borderRadius: BorderRadius.circular(6)),
+                child: Text('🔥 $_killzoneTitle', style: const TextStyle(color: Color(0xFF00E676), fontWeight: FontWeight.bold, fontSize: 11)),
               ),
               const Spacer(),
-              Text(
-                _istTimeStr,
-                style: const TextStyle(
-                  color: Colors.amber,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 13,
-                ),
-              ),
+              Text(_istTimeStr, style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 13)),
             ],
           ),
           const SizedBox(height: 6),
           Row(
             children: [
               Expanded(
-                child: Text(
-                  '🎯 $_killzoneSubtitle',
-                  style: const TextStyle(fontSize: 11, color: Colors.white70),
-                  overflow: TextOverflow.ellipsis,
-                ),
+                child: Text('🎯 $_killzoneSubtitle', style: const TextStyle(fontSize: 11, color: Colors.white70), overflow: TextOverflow.ellipsis),
               ),
-              Text(
-                '⏳ $_killzoneCountdown',
-                style: const TextStyle(
-                  fontSize: 11,
-                  color: Color(0xFF40C4FF),
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
+              Text('⏳ $_killzoneCountdown', style: const TextStyle(fontSize: 11, color: Color(0xFF40C4FF), fontWeight: FontWeight.w600)),
             ],
           ),
         ],
@@ -958,10 +863,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
       decoration: const BoxDecoration(
         color: Color(0xFF0E131D),
-        border: Border(
-          top: BorderSide(color: Colors.white12),
-          bottom: BorderSide(color: Colors.white12),
-        ),
+        border: Border(top: BorderSide(color: Colors.white12), bottom: BorderSide(color: Colors.white12)),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -972,11 +874,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
           ),
           Text(
             'BTC.D: ${_btcDominance.toStringAsFixed(2)}%',
-            style: const TextStyle(
-              color: Colors.amber,
-              fontWeight: FontWeight.bold,
-              fontSize: 13,
-            ),
+            style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 13),
           ),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -985,23 +883,13 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
               borderRadius: BorderRadius.circular(6),
               border: Border.all(color: quadColor),
             ),
-            child: Text(
-              'QUAD $_currentQuad',
-              style: TextStyle(
-                color: quadColor,
-                fontWeight: FontWeight.bold,
-                fontSize: 12,
-              ),
-            ),
+            child: Text('QUAD $_currentQuad', style: TextStyle(color: quadColor, fontWeight: FontWeight.bold, fontSize: 12)),
           ),
         ],
       ),
     );
   }
 
-  // ==========================================================================
-  // SCANNER TAB
-  // ==========================================================================
   Widget _buildScannerTab() {
     final list = _filteredSignals;
     final all75Count = _signals.where((s) => s.confidence >= 75).length;
@@ -1024,10 +912,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
                     isDense: true,
                     filled: true,
                     fillColor: const Color(0xFF141923),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide: const BorderSide(color: Colors.white24),
-                    ),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: Colors.white24)),
                   ),
                 ),
               ),
@@ -1040,23 +925,13 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
                   decoration: BoxDecoration(
-                    color: _scanAll150Plus
-                        ? const Color(0xFF0D2E22)
-                        : const Color(0xFF171C26),
+                    color: _scanAll150Plus ? const Color(0xFF0D2E22) : const Color(0xFF171C26),
                     borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                      color: _scanAll150Plus
-                          ? const Color(0xFF00E676)
-                          : Colors.white24,
-                    ),
+                    border: Border.all(color: _scanAll150Plus ? const Color(0xFF00E676) : Colors.white24),
                   ),
                   child: Text(
                     '🌍 All 150+ ${_scanAll150Plus ? 'ON' : 'OFF'} (${_signals.length}/$_scannedCoinsCount)',
-                    style: const TextStyle(
-                      color: Color(0xFF00E676),
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
-                    ),
+                    style: const TextStyle(color: Color(0xFF00E676), fontWeight: FontWeight.bold, fontSize: 12),
                   ),
                 ),
               ),
@@ -1068,9 +943,9 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
           child: Row(
             children: [
-              _buildFilterChip('ALL_75', 'All (greater than 75%) ($all75Count)'),
+              _buildFilterChip('ALL_75', 'All (>=75%) ($all75Count)'),
               const SizedBox(width: 8),
-              _buildFilterChip('ELITE_85', '💎 Elite (greater than 85%) ($elite85Count)'),
+              _buildFilterChip('ELITE_85', '💎 Elite (>=85%) ($elite85Count)'),
               const SizedBox(width: 8),
               _buildFilterChip('PULLBACKS', '🛡️ Pullbacks ($pullbackCount)'),
               const SizedBox(width: 8),
@@ -1116,8 +991,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
   Widget _buildSignalCard(TradeSignal sig) {
     final bool isLong = sig.direction == 'LONG';
     final Color dirColor = isLong ? const Color(0xFF00E676) : Colors.redAccent;
-    final String timeStr =
-        '${sig.signalTimeIst.hour.toString().padLeft(2, '0')}:${sig.signalTimeIst.minute.toString().padLeft(2, '0')} IST';
+    final String timeStr = '${sig.signalTimeIst.hour.toString().padLeft(2, '0')}:${sig.signalTimeIst.minute.toString().padLeft(2, '0')} IST';
 
     return Card(
       color: const Color(0xFF131822),
@@ -1139,59 +1013,27 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
             children: [
               Row(
                 children: [
-                  Text(
-                    sig.symbol,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
+                  Text(sig.symbol, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                   const SizedBox(width: 8),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: dirColor.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text(
-                      '${sig.direction} • ${sig.confidence}%',
-                      style: TextStyle(
-                        color: dirColor,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 12,
-                      ),
-                    ),
+                    decoration: BoxDecoration(color: dirColor.withOpacity(0.15), borderRadius: BorderRadius.circular(6)),
+                    child: Text('${sig.direction} • ${sig.confidence}%', style: TextStyle(color: dirColor, fontWeight: FontWeight.bold, fontSize: 12)),
                   ),
                   if (sig.isSmtStrong) ...[
                     const SizedBox(width: 6),
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: Colors.amber.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: const Text(
-                        'SMT STRONG',
-                        style: TextStyle(
-                          color: Colors.amber,
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
+                      decoration: BoxDecoration(color: Colors.amber.withOpacity(0.2), borderRadius: BorderRadius.circular(4)),
+                      child: const Text('SMT STRONG', style: TextStyle(color: Colors.amber, fontSize: 10, fontWeight: FontWeight.bold)),
                     ),
                   ],
                   const Spacer(),
-                  Text(
-                    timeStr,
-                    style: const TextStyle(fontSize: 11, color: Colors.white54),
-                  ),
+                  Text(timeStr, style: const TextStyle(fontSize: 11, color: Colors.white54)),
                 ],
               ),
               const SizedBox(height: 6),
-              Text(
-                '${sig.strategyName}  •  Pattern: ${sig.patternTag}',
-                style: const TextStyle(fontSize: 12, color: Colors.white70),
-              ),
+              Text('${sig.strategyName}  •  Pattern: ${sig.patternTag}', style: const TextStyle(fontSize: 12, color: Colors.white70)),
               const Divider(height: 16, color: Colors.white12),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1200,18 +1042,6 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
                   _buildPriceMetric('STOP LOSS', sig.stopLoss, Colors.redAccent),
                   _buildPriceMetric('TP 1 (1:2)', sig.tp1, const Color(0xFF00E676)),
                   _buildPriceMetric('TP 2 (1:3.5)', sig.tp2, Colors.cyanAccent),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: const [
-                  Icon(Icons.candlestick_chart, size: 14, color: Color(0xFF40C4FF)),
-                  SizedBox(width: 4),
-                  Text(
-                    'Tap to open Live Delta Mark Price Chart (HH/HL/FVG)',
-                    style: TextStyle(fontSize: 11, color: Color(0xFF40C4FF)),
-                  ),
                 ],
               ),
             ],
@@ -1229,18 +1059,14 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
         const SizedBox(height: 2),
         Text(
           val > 100 ? val.toStringAsFixed(2) : val.toStringAsFixed(4),
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.bold,
-            color: color,
-          ),
+          style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: color),
         ),
       ],
     );
   }
 
   // ==========================================================================
-  // LIVE DELTA EXCHANGE MARK PRICE CHART TAB (WITH HH, HL, LH, LL & FVG/OB)
+  // LIVE DELTA MARK PRICE CHART TAB (WITH 1H OB & BOS OVERLAYS)
   // ==========================================================================
   Widget _buildLiveChartInspectorTab() {
     TradeSignal? activeSig;
@@ -1253,32 +1079,22 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
 
     return Column(
       children: [
-        // Chart Control Bar
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           color: const Color(0xFF131822),
           child: Row(
             children: [
               DropdownButton<String>(
-                value: _coreSymbols.contains(_selectedChartSymbol)
-                    ? _selectedChartSymbol
-                    : _coreSymbols.first,
+                value: _coreSymbols.contains(_selectedChartSymbol) ? _selectedChartSymbol : _coreSymbols.first,
                 dropdownColor: const Color(0xFF171E2C),
                 underline: const SizedBox(),
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 15,
-                  color: Colors.white,
-                ),
-                items: _coreSymbols
-                    .map((s) => DropdownMenuItem(value: s, child: Text(s)))
-                    .toList(),
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.white),
+                items: _coreSymbols.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
                 onChanged: (val) {
                   if (val != null) _loadLiveChart(val, _selectedResolution);
                 },
               ),
               const SizedBox(width: 8),
-              // Timeframe Selector
               for (final tf in ['1m', '5m', '15m', '1h', '4h'])
                 Padding(
                   padding: const EdgeInsets.only(right: 4),
@@ -1287,23 +1103,14 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
-                        color: _selectedResolution == tf
-                            ? const Color(0xFF2979FF)
-                            : Colors.transparent,
+                        color: _selectedResolution == tf ? const Color(0xFF2979FF) : Colors.transparent,
                         borderRadius: BorderRadius.circular(6),
                       ),
-                      child: Text(
-                        tf,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
+                      child: Text(tf, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
                     ),
                   ),
                 ),
               const Spacer(),
-              // Toggle Mark Price vs Last Price
               GestureDetector(
                 onTap: () {
                   setState(() => _useMarkPriceChart = !_useMarkPriceChart);
@@ -1312,28 +1119,19 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
-                    color: _useMarkPriceChart
-                        ? Colors.amber.withOpacity(0.2)
-                        : Colors.white10,
+                    color: _useMarkPriceChart ? Colors.amber.withOpacity(0.2) : Colors.white10,
                     borderRadius: BorderRadius.circular(6),
-                    border: Border.all(
-                      color: _useMarkPriceChart ? Colors.amber : Colors.white24,
-                    ),
+                    border: Border.all(color: _useMarkPriceChart ? Colors.amber : Colors.white24),
                   ),
                   child: Text(
                     _useMarkPriceChart ? 'MARK PRICE' : 'LAST PRICE',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      color: _useMarkPriceChart ? Colors.amber : Colors.white70,
-                    ),
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: _useMarkPriceChart ? Colors.amber : Colors.white70),
                   ),
                 ),
               ),
             ],
           ),
         ),
-        // Live Price & Pattern Legend Header
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           color: const Color(0xFF0E131A),
@@ -1341,21 +1139,16 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
             children: [
               Text(
                 'Mark: \$${_liveMarkPrice > 100 ? _liveMarkPrice.toStringAsFixed(2) : _liveMarkPrice.toStringAsFixed(4)}',
-                style: const TextStyle(
-                  color: Colors.amber,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14,
-                ),
+                style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 14),
               ),
               const SizedBox(width: 14),
               const Text(
-                '● HH/HL/LH/LL Swings   ■ Bull/Bear FVG   --- Entry/SL/TP',
-                style: TextStyle(fontSize: 11, color: Colors.white60),
+                '⚡ 1H OB & BOS Overlays Active',
+                style: TextStyle(fontSize: 11, color: Color(0xFF40C4FF), fontWeight: FontWeight.bold),
               ),
             ],
           ),
         ),
-        // Interactive Live Candlestick Chart Canvas
         Expanded(
           child: _isLoadingChart
               ? const Center(child: CircularProgressIndicator())
@@ -1363,6 +1156,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
                   ? const Center(child: Text('No candle data available'))
                   : InteractiveDeltaChart(
                       candles: _chartCandles,
+                      htfZones: _htfZones,
                       liveMarkPrice: _liveMarkPrice,
                       activeSignal: activeSig,
                     ),
@@ -1372,23 +1166,16 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
   }
 }
 
-// ============================================================================
-// INTERACTIVE LIVE DELTA EXCHANGE MARK PRICE CHART WIDGET
-// Automatically computes & draws:
-// 1. Real-time OHLC Candlesticks + Live Mark Price Line
-// 2. Market Structure Swing Labels: HH, HL, LH, LL + BOS/CHoCH
-// 3. Institutional FVG (Fair Value Gaps) & Order Block Zones
-// 4. Strategy Entry, Stop Loss, TP1 & TP2 Overlay Lines
-// ============================================================================
-
 class InteractiveDeltaChart extends StatefulWidget {
   final List<Candle> candles;
+  final List<HtfZone> htfZones;
   final double liveMarkPrice;
   final TradeSignal? activeSignal;
 
   const InteractiveDeltaChart({
     super.key,
     required this.candles,
+    required this.htfZones,
     required this.liveMarkPrice,
     this.activeSignal,
   });
@@ -1399,7 +1186,7 @@ class InteractiveDeltaChart extends StatefulWidget {
 
 class _InteractiveDeltaChartState extends State<InteractiveDeltaChart> {
   int _visibleCount = 55;
-  int _scrollOffset = 0; // 0 = pinned to latest live candle
+  int _scrollOffset = 0;
 
   @override
   Widget build(BuildContext context) {
@@ -1424,6 +1211,7 @@ class _InteractiveDeltaChartState extends State<InteractiveDeltaChart> {
         size: Size.infinite,
         painter: DeltaLiveChartPainter(
           candles: widget.candles,
+          htfZones: widget.htfZones,
           visibleCount: _visibleCount,
           scrollOffset: _scrollOffset,
           liveMarkPrice: widget.liveMarkPrice,
@@ -1436,6 +1224,7 @@ class _InteractiveDeltaChartState extends State<InteractiveDeltaChart> {
 
 class DeltaLiveChartPainter extends CustomPainter {
   final List<Candle> candles;
+  final List<HtfZone> htfZones;
   final int visibleCount;
   final int scrollOffset;
   final double liveMarkPrice;
@@ -1443,6 +1232,7 @@ class DeltaLiveChartPainter extends CustomPainter {
 
   DeltaLiveChartPainter({
     required this.candles,
+    required this.htfZones,
     required this.visibleCount,
     required this.scrollOffset,
     required this.liveMarkPrice,
@@ -1475,10 +1265,9 @@ class DeltaLiveChartPainter extends CustomPainter {
     minPrice -= padding;
     final double priceRange = (maxPrice - minPrice).clamp(1e-8, double.infinity);
 
-    double priceToY(double p) =>
-        chartHeight - ((p - minPrice) / priceRange) * chartHeight;
+    double priceToY(double p) => chartHeight - ((p - minPrice) / priceRange) * chartHeight;
 
-    // 1. Draw Subtle Grid Lines & Right Axis Prices
+    // 1. Grid Lines
     final Paint gridPaint = Paint()
       ..color = Colors.white.withOpacity(0.06)
       ..strokeWidth = 1;
@@ -1499,47 +1288,30 @@ class DeltaLiveChartPainter extends CustomPainter {
     final double candleSlotWidth = chartWidth / visible.length;
     final double bodyWidth = (candleSlotWidth * 0.68).clamp(2.0, 14.0);
 
-    // 2. Detect & Draw FVG (Fair Value Gaps) & Order Blocks inside Visible Window
-    for (int i = 2; i < visible.length; i++) {
-      final c0 = visible[i - 2];
-      final c1 = visible[i - 1];
-      final c2 = visible[i];
+    // 2. Render Higher-Timeframe 1H Order Block Zones & BOS Lines
+    for (final zone in htfZones) {
+      final double topY = priceToY(zone.top);
+      final double botY = priceToY(zone.bottom);
 
-      // Bullish FVG
-      if (c2.low > c0.high && c1.close > c1.open) {
-        final double topY = priceToY(c2.low);
-        final double botY = priceToY(c0.high);
-        final double startX = (i - 2) * candleSlotWidth;
-        final Rect fvgRect = Rect.fromLTRB(startX, topY, chartWidth, botY);
+      if (zone.label.contains('BOS')) {
+        final Paint bosPaint = Paint()
+          ..color = Colors.cyanAccent.withOpacity(0.6)
+          ..strokeWidth = 1.2;
+        canvas.drawLine(Offset(0, topY), Offset(chartWidth, topY), bosPaint);
+        _drawText(canvas, zone.label, Offset(10, topY - 14), Colors.cyanAccent, 9, bold: true);
+      } else {
+        final Rect zoneRect = Rect.fromLTRB(0, topY, chartWidth, botY);
         canvas.drawRect(
-          fvgRect,
-          Paint()..color = const Color(0xFF00E676).withOpacity(0.09),
+          zoneRect,
+          Paint()..color = zone.isBullish ? const Color(0xFF00E676).withOpacity(0.06) : Colors.redAccent.withOpacity(0.06),
         );
         _drawText(
           canvas,
-          'Bull FVG',
-          Offset(startX + 4, topY + 2),
-          const Color(0xFF00E676).withOpacity(0.7),
+          zone.label,
+          Offset(12, topY + 2),
+          zone.isBullish ? const Color(0xFF00E676).withOpacity(0.8) : Colors.redAccent.withOpacity(0.8),
           9,
-        );
-      }
-
-      // Bearish FVG
-      if (c2.high < c0.low && c1.close < c1.open) {
-        final double topY = priceToY(c0.low);
-        final double botY = priceToY(c2.high);
-        final double startX = (i - 2) * candleSlotWidth;
-        final Rect fvgRect = Rect.fromLTRB(startX, topY, chartWidth, botY);
-        canvas.drawRect(
-          fvgRect,
-          Paint()..color = Colors.redAccent.withOpacity(0.09),
-        );
-        _drawText(
-          canvas,
-          'Bear FVG',
-          Offset(startX + 4, topY + 2),
-          Colors.redAccent.withOpacity(0.7),
-          9,
+          bold: true,
         );
       }
     }
@@ -1556,30 +1328,21 @@ class DeltaLiveChartPainter extends CustomPainter {
       final double openY = priceToY(c.open);
       final double closeY = priceToY(c.close);
 
-      // Wick
       canvas.drawLine(
         Offset(centerX, highY),
         Offset(centerX, lowY),
-        Paint()
-          ..color = color
-          ..strokeWidth = 1.2,
+        Paint()..color = color..strokeWidth = 1.2,
       );
 
-      // Body
       final double top = math.min(openY, closeY);
       final double bottom = math.max(openY, closeY);
       canvas.drawRect(
-        Rect.fromLTRB(
-          centerX - bodyWidth / 2,
-          top,
-          centerX + bodyWidth / 2,
-          math.max(top + 1.5, bottom),
-        ),
+        Rect.fromLTRB(centerX - bodyWidth / 2, top, centerX + bodyWidth / 2, math.max(top + 1.5, bottom)),
         Paint()..color = color,
       );
     }
 
-    // 4. Detect & Draw Swing Structure Points: HH, HL, LH, LL
+    // 4. Draw Swing Structure Points (HH, HL, LH, LL)
     double? prevSwingHigh;
     double? prevSwingLow;
 
@@ -1598,79 +1361,40 @@ class DeltaLiveChartPainter extends CustomPainter {
       final double centerX = (i + 0.5) * candleSlotWidth;
 
       if (isPivotHigh) {
-        final String tag = (prevSwingHigh == null || c.high >= prevSwingHigh)
-            ? 'HH'
-            : 'LH';
+        final String tag = (prevSwingHigh == null || c.high >= prevSwingHigh) ? 'HH' : 'LH';
         prevSwingHigh = c.high;
         final double y = priceToY(c.high) - 14;
-        _drawTagBadge(
-          canvas,
-          tag,
-          Offset(centerX - 10, y),
-          tag == 'HH' ? const Color(0xFF00E676) : Colors.orangeAccent,
-        );
+        _drawTagBadge(canvas, tag, Offset(centerX - 10, y), tag == 'HH' ? const Color(0xFF00E676) : Colors.orangeAccent);
       } else if (isPivotLow) {
-        final String tag = (prevSwingLow == null || c.low >= prevSwingLow)
-            ? 'HL'
-            : 'LL';
+        final String tag = (prevSwingLow == null || c.low >= prevSwingLow) ? 'HL' : 'LL';
         prevSwingLow = c.low;
         final double y = priceToY(c.low) + 4;
-        _drawTagBadge(
-          canvas,
-          tag,
-          Offset(centerX - 10, y),
-          tag == 'HL' ? Colors.cyanAccent : Colors.redAccent,
-        );
+        _drawTagBadge(canvas, tag, Offset(centerX - 10, y), tag == 'HL' ? Colors.cyanAccent : Colors.redAccent);
       }
     }
 
-    // 5. Draw Active Strategy Lines (Entry, Stop Loss, TP1)
+    // 5. Draw Strategy Lines
     if (activeSignal != null) {
-      _drawHorizontalStrategyLine(
-        canvas,
-        chartWidth,
-        priceToY(activeSignal!.entry),
-        'ENTRY ${activeSignal!.direction}',
-        Colors.amber,
-      );
-      _drawHorizontalStrategyLine(
-        canvas,
-        chartWidth,
-        priceToY(activeSignal!.stopLoss),
-        'SL',
-        Colors.redAccent,
-      );
-      _drawHorizontalStrategyLine(
-        canvas,
-        chartWidth,
-        priceToY(activeSignal!.tp1),
-        'TP1 (1:2)',
-        const Color(0xFF00E676),
-      );
+      _drawHorizontalStrategyLine(canvas, chartWidth, priceToY(activeSignal!.entry), 'ENTRY ${activeSignal!.direction}', Colors.amber);
+      _drawHorizontalStrategyLine(canvas, chartWidth, priceToY(activeSignal!.stopLoss), 'SL', Colors.redAccent);
+      _drawHorizontalStrategyLine(canvas, chartWidth, priceToY(activeSignal!.tp1), 'TP1 (1:2)', const Color(0xFF00E676));
     }
 
-    // 6. Draw Live Delta Mark Price Line & Tag
+    // 6. Live Mark Price Line
     if (liveMarkPrice > 0) {
       final double markY = priceToY(liveMarkPrice).clamp(0.0, chartHeight);
       canvas.drawLine(
         Offset(0, markY),
         Offset(chartWidth, markY),
-        Paint()
-          ..color = Colors.amber
-          ..strokeWidth = 1.2,
+        Paint()..color = Colors.amber..strokeWidth = 1.2,
       );
       canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTWH(chartWidth + 2, markY - 9, rightPriceAxisWidth - 4, 18),
-          const Radius.circular(4),
-        ),
+        RRect.fromRectAndRadius(Rect.fromLTWH(chartWidth + 2, markY - 9, rightPriceAxisWidth - 4, 18), const Radius.circular(4)),
         Paint()..color = Colors.amber,
       );
       _drawText(
         canvas,
-        liveMarkPrice > 100
-            ? liveMarkPrice.toStringAsFixed(1)
-            : liveMarkPrice.toStringAsFixed(4),
+        liveMarkPrice > 100 ? liveMarkPrice.toStringAsFixed(1) : liveMarkPrice.toStringAsFixed(4),
         Offset(chartWidth + 5, markY - 6),
         Colors.black,
         10,
@@ -1679,45 +1403,22 @@ class DeltaLiveChartPainter extends CustomPainter {
     }
   }
 
-  void _drawHorizontalStrategyLine(
-    Canvas canvas,
-    double chartWidth,
-    double y,
-    String label,
-    Color color,
-  ) {
-    final Paint paint = Paint()
-      ..color = color.withOpacity(0.85)
-      ..strokeWidth = 1.2;
-    canvas.drawLine(Offset(0, y), Offset(chartWidth, y), paint);
+  void _drawHorizontalStrategyLine(Canvas canvas, double chartWidth, double y, String label, Color color) {
+    canvas.drawLine(Offset(0, y), Offset(chartWidth, y), Paint()..color = color.withOpacity(0.85)..strokeWidth = 1.2);
     _drawText(canvas, label, Offset(8, y - 13), color, 10, bold: true);
   }
 
   void _drawTagBadge(Canvas canvas, String text, Offset pos, Color color) {
     final Rect box = Rect.fromLTWH(pos.dx, pos.dy, 22, 13);
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(box, const Radius.circular(3)),
-      Paint()..color = color.withOpacity(0.18),
-    );
+    canvas.drawRRect(RRect.fromRectAndRadius(box, const Radius.circular(3)), Paint()..color = color.withOpacity(0.18));
     _drawText(canvas, text, Offset(pos.dx + 4, pos.dy + 1), color, 9, bold: true);
   }
 
-  void _drawText(
-    Canvas canvas,
-    String text,
-    Offset pos,
-    Color color,
-    double fontSize, {
-    bool bold = false,
-  }) {
+  void _drawText(Canvas canvas, String text, Offset pos, Color color, double fontSize, {bool bold = false}) {
     final TextPainter tp = TextPainter(
       text: TextSpan(
         text: text,
-        style: TextStyle(
-          color: color,
-          fontSize: fontSize,
-          fontWeight: bold ? FontWeight.bold : FontWeight.normal,
-        ),
+        style: TextStyle(color: color, fontSize: fontSize, fontWeight: bold ? FontWeight.bold : FontWeight.normal),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
