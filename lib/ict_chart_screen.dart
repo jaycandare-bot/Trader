@@ -1,10 +1,11 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart' show DateFormat;
 import 'delta_ict_service.dart';
 
 /// Reusable Delta Exchange / TradingView-Grade Interactive Zoomable & Pannable Chart Widget
-/// Works both inside scrollable tabs (Manual Inspector) and full-screen view!
+/// Features a Collision-Free Smart Label Engine & TOLAG CRT Hybrid Fusion HUD
 class DeltaProInteractiveChart extends StatefulWidget {
   final IctSignal signal;
   final double height;
@@ -14,7 +15,7 @@ class DeltaProInteractiveChart extends StatefulWidget {
   const DeltaProInteractiveChart({
     super.key,
     required this.signal,
-    this.height = 380,
+    this.height = 420,
     this.isFullScreen = false,
     this.onOpenFullScreen,
   });
@@ -24,24 +25,16 @@ class DeltaProInteractiveChart extends StatefulWidget {
 }
 
 class _DeltaProInteractiveChartState extends State<DeltaProInteractiveChart> {
-  // Visible candle window count: smaller = zoomed in (min 12), larger = zoomed out (max 95)
   double _visibleCandles = 34.0;
   double _baseVisibleCandles = 34.0;
-
-  // How many candles scrolled back from the latest live right edge (0 = live edge)
   double _scrollBackBars = 0.0;
-
-  // Vertical Y-axis zoom multiplier (1.0 = auto-fit visible candles)
   double _verticalZoom = 1.0;
-
-  // Whether to fit Y-axis tightly to visible candles (Delta Exchange default) or expand to include Wide TP3/SL
   bool _fitToTargets = false;
-
-  // Crosshair mode: when true, 1-finger drag moves precision OHLCV crosshair; when false, 1-finger drag pans history
   bool _crosshairMode = false;
+  bool _showCrtHud = true;
   Offset? _crosshairPos;
 
-  // Clean Layer View Mode: 'ALL', 'CLEAN', 'ICT', 'PATTERNS', 'ORDERFLOW'
+  // Layer View Modes: 'ALL', 'CLEAN', 'ICT', 'PATTERNS', 'ORDERFLOW'
   String _viewMode = 'ALL';
 
   void _zoomIn() {
@@ -83,8 +76,8 @@ class _DeltaProInteractiveChartState extends State<DeltaProInteractiveChart> {
     final sig = widget.signal;
     final candles = sig.candles;
     final dec = sig.markPrice < 1 ? 5 : (sig.markPrice < 100 ? 3 : 1);
+    final isLong = sig.direction == 'LONG';
 
-    // Determine currently inspected candle for OHLCV bar
     Candle inspected = candles.isNotEmpty
         ? candles.last
         : Candle(open: sig.markPrice, high: sig.markPrice, low: sig.markPrice, close: sig.markPrice, volume: 0, timestamp: 0);
@@ -113,7 +106,7 @@ class _DeltaProInteractiveChartState extends State<DeltaProInteractiveChart> {
       ),
       child: Column(
         children: [
-          // 1. Delta Exchange Style Live OHLCV + Layer Mode Bar
+          // 1. Clean Aligned Header: Session + Signal Time + OHLCV + Layer Toolbar
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             decoration: const BoxDecoration(
@@ -123,7 +116,7 @@ class _DeltaProInteractiveChartState extends State<DeltaProInteractiveChart> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Live Session & Killzone Status Row inside Chart
+                // Row A: Killzone + Signal Timestamp
                 Builder(
                   builder: (ctx) {
                     final sess = DeltaExchangeIctService.getLiveSessionTelemetry();
@@ -149,9 +142,17 @@ class _DeltaProInteractiveChartState extends State<DeltaProInteractiveChart> {
                               ),
                             ),
                             const SizedBox(width: 6),
-                            Text(
-                              '⏱ ${sess.istTimeStr} (${sess.utcTimeStr}) • ${sess.countdownLabel}',
-                              style: const TextStyle(fontSize: 9.5, color: Colors.white70, fontWeight: FontWeight.w600),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.amberAccent.withOpacity(0.14),
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(color: Colors.amberAccent.withOpacity(0.45)),
+                              ),
+                              child: Text(
+                                '🕒 ${sig.launchedAgo}',
+                                style: const TextStyle(fontSize: 9.5, fontWeight: FontWeight.bold, color: Colors.amberAccent),
+                              ),
                             ),
                           ],
                         ),
@@ -159,22 +160,37 @@ class _DeltaProInteractiveChartState extends State<DeltaProInteractiveChart> {
                     );
                   },
                 ),
+                // Row B: Aligned Strategy & Pattern Strip (Never covers candles!)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        _strategyChip(
+                          'CRT HYBRID: ${isLong ? 'ACTIVE LONG' : 'ACTIVE SHORT'} (${sig.confluenceScore}/100)',
+                          isLong ? const Color(0xFF00E676) : const Color(0xFFFF3D57),
+                        ),
+                        const SizedBox(width: 5),
+                        _strategyChip('📐 ${sig.patternAnalysis.formedPattern}', Colors.cyanAccent),
+                        const SizedBox(width: 5),
+                        _strategyChip('PO3: ${sig.strategyExtras.po3Phase}', Colors.amberAccent),
+                        const SizedBox(width: 5),
+                        _strategyChip('OTE: \$${sig.otePrice.toStringAsFixed(dec)}', Colors.purpleAccent),
+                        const SizedBox(width: 5),
+                        _strategyChip('EQ 50%: \$${sig.equilibrium.toStringAsFixed(dec)}', Colors.white70),
+                      ],
+                    ),
+                  ),
+                ),
+                // Row C: Live OHLCV Bar
                 SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
                   child: Row(
                     children: [
-                      Text(
-                        'O ${inspected.open.toStringAsFixed(dec)}  ',
-                        style: const TextStyle(fontSize: 10, color: Colors.white70, fontFamily: 'monospace'),
-                      ),
-                      Text(
-                        'H ${inspected.high.toStringAsFixed(dec)}  ',
-                        style: const TextStyle(fontSize: 10, color: Color(0xFF00E676), fontFamily: 'monospace'),
-                      ),
-                      Text(
-                        'L ${inspected.low.toStringAsFixed(dec)}  ',
-                        style: const TextStyle(fontSize: 10, color: Color(0xFFFF5252), fontFamily: 'monospace'),
-                      ),
+                      Text('O ${inspected.open.toStringAsFixed(dec)}  ', style: const TextStyle(fontSize: 10, color: Colors.white70, fontFamily: 'monospace')),
+                      Text('H ${inspected.high.toStringAsFixed(dec)}  ', style: const TextStyle(fontSize: 10, color: Color(0xFF00E676), fontFamily: 'monospace')),
+                      Text('L ${inspected.low.toStringAsFixed(dec)}  ', style: const TextStyle(fontSize: 10, color: Color(0xFFFF5252), fontFamily: 'monospace')),
                       Text(
                         'C ${inspected.close.toStringAsFixed(dec)}  ',
                         style: TextStyle(
@@ -192,30 +208,40 @@ class _DeltaProInteractiveChartState extends State<DeltaProInteractiveChart> {
                           color: isBullBar ? const Color(0xFF00E676) : const Color(0xFFFF5252),
                         ),
                       ),
+                      const SizedBox(width: 8),
+                      Text(
+                        sig.mtfStructure,
+                        style: const TextStyle(fontSize: 9.5, color: Colors.cyanAccent, fontWeight: FontWeight.bold),
+                      ),
                     ],
                   ),
                 ),
                 const SizedBox(height: 5),
-                // Layer Mode Selector + Zoom/Pan Toolbar
+                // Row D: Layer Mode Selector + Zoom/Pan Toolbar
                 SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
                   child: Row(
                     children: [
-                      _modeBtn('All Layers', 'ALL'),
-                      _modeBtn('Clean Delta', 'CLEAN'),
-                      _modeBtn('ICT + Unicorn', 'ICT'),
+                      _modeBtn('All Pro', 'ALL'),
+                      _modeBtn('Clean Chart', 'CLEAN'),
+                      _modeBtn('ICT + CRT', 'ICT'),
                       _modeBtn('Patterns + Wave', 'PATTERNS'),
-                      _modeBtn('Orderflow CVD', 'ORDERFLOW'),
+                      _modeBtn('CVD + VP', 'ORDERFLOW'),
                       const SizedBox(width: 6),
-                      _toolIconBtn(Icons.add, 'Zoom In', _zoomIn),
-                      _toolIconBtn(Icons.remove, 'Zoom Out', _zoomOut),
-                      _toolIconBtn(Icons.chevron_left, 'Pan Left', _panLeft),
-                      _toolIconBtn(Icons.chevron_right, 'Pan Right', _panRight),
+                      _toolTextBtn(
+                        'CRT HUD',
+                        _showCrtHud,
+                        () => setState(() => _showCrtHud = !_showCrtHud),
+                      ),
                       _toolTextBtn(
                         _fitToTargets ? 'Fit: TP/SL' : 'Fit: Candles',
                         _fitToTargets,
                         () => setState(() => _fitToTargets = !_fitToTargets),
                       ),
+                      _toolIconBtn(Icons.add, 'Zoom In', _zoomIn),
+                      _toolIconBtn(Icons.remove, 'Zoom Out', _zoomOut),
+                      _toolIconBtn(Icons.chevron_left, 'Pan Left', _panLeft),
+                      _toolIconBtn(Icons.chevron_right, 'Pan Right', _panRight),
                       _toolTextBtn(
                         'Crosshair',
                         _crosshairMode,
@@ -233,50 +259,110 @@ class _DeltaProInteractiveChartState extends State<DeltaProInteractiveChart> {
               ],
             ),
           ),
-          // 2. Interactive Pinch-Zoom & Horizontal Drag Canvas
+
+          // 2. Interactive Pinch-Zoom & Horizontal Drag Canvas with Floating TOLAG CRT HUD
           Expanded(
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onDoubleTap: _resetChart,
-              onScaleStart: (details) {
-                _baseVisibleCandles = _visibleCandles;
-              },
-              onScaleUpdate: (details) {
-                setState(() {
-                  if (details.pointerCount >= 2) {
-                    // Pinch to zoom horizontally & vertically
-                    _visibleCandles = (_baseVisibleCandles / details.scale).clamp(12.0, 95.0);
-                  } else if (_crosshairMode) {
-                    // 1-finger precision crosshair inspection
-                    _crosshairPos = details.localFocalPoint;
-                  } else {
-                    // 1-finger smooth horizontal history pan
-                    final double sensitivity = _visibleCandles / 260.0;
-                    final double maxBack = max(0.0, candles.length - _visibleCandles);
-                    _scrollBackBars = (_scrollBackBars + (details.focalPointDelta.dx * sensitivity)).clamp(0.0, maxBack);
-                  }
-                });
-              },
-              onTapDown: (details) {
-                setState(() => _crosshairPos = details.localPosition);
-              },
-              child: ClipRect(
-                child: CustomPaint(
-                  size: Size.infinite,
-                  painter: _DeltaExchangeProChartPainter(
-                    signal: sig,
-                    startIdx: startIdx,
-                    endIdx: endIdx,
-                    verticalZoom: _verticalZoom,
-                    fitToTargets: _fitToTargets,
-                    viewMode: _viewMode,
-                    crosshairPos: _crosshairPos,
+            child: Stack(
+              children: [
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onDoubleTap: _resetChart,
+                  onScaleStart: (details) {
+                    _baseVisibleCandles = _visibleCandles;
+                  },
+                  onScaleUpdate: (details) {
+                    setState(() {
+                      if (details.pointerCount >= 2) {
+                        _visibleCandles = (_baseVisibleCandles / details.scale).clamp(12.0, 95.0);
+                      } else if (_crosshairMode) {
+                        _crosshairPos = details.localFocalPoint;
+                      } else {
+                        final double sensitivity = _visibleCandles / 260.0;
+                        final double maxBack = max(0.0, candles.length - _visibleCandles);
+                        _scrollBackBars = (_scrollBackBars + (details.focalPointDelta.dx * sensitivity)).clamp(0.0, maxBack);
+                      }
+                    });
+                  },
+                  onTapDown: (details) {
+                    setState(() => _crosshairPos = details.localPosition);
+                  },
+                  child: ClipRect(
+                    child: CustomPaint(
+                      size: Size.infinite,
+                      painter: _DeltaExchangeProChartPainter(
+                        signal: sig,
+                        startIdx: startIdx,
+                        endIdx: endIdx,
+                        verticalZoom: _verticalZoom,
+                        fitToTargets: _fitToTargets,
+                        viewMode: _viewMode,
+                        crosshairPos: _crosshairPos,
+                      ),
+                    ),
                   ),
                 ),
-              ),
+
+                // Compact Non-Overlapping TOLAG CRT Precision HUD Box (Top-Left Corner, Toggleable)
+                if (_showCrtHud)
+                  Positioned(
+                    top: 6,
+                    left: 6,
+                    child: IgnorePointer(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF0D1422).withOpacity(0.86),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: Colors.cyanAccent.withOpacity(0.35), width: 0.9),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.diamond, size: 10, color: isLong ? const Color(0xFF00E676) : const Color(0xFFFF3D57)),
+                                const SizedBox(width: 4),
+                                Text(
+                                  'TOLAG CRT FUSION • ${sig.confluenceScore}/100',
+                                  style: const TextStyle(fontSize: 8.5, fontWeight: FontWeight.bold, color: Colors.cyanAccent),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              'CRT High: ${sig.swingHighBsl.toStringAsFixed(dec)} | CRT Low: ${sig.swingLowSsl.toStringAsFixed(dec)}',
+                              style: const TextStyle(fontSize: 8.0, color: Colors.white70),
+                            ),
+                            Text(
+                              'EQ 50%: ${sig.equilibrium.toStringAsFixed(dec)} | OTE 70.5%: ${sig.otePrice.toStringAsFixed(dec)}',
+                              style: const TextStyle(fontSize: 8.0, color: Colors.amberAccent),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _strategyChip(String text, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: color.withOpacity(0.4)),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(fontSize: 9.0, fontWeight: FontWeight.bold, color: color),
       ),
     );
   }
@@ -371,12 +457,7 @@ class _DeltaExchangeProChartPainter extends CustomPainter {
     final int visLen = visible.length;
     final int dec = signal.markPrice < 1 ? 5 : (signal.markPrice < 100 ? 3 : 1);
 
-    // Layout Regions:
-    // - Right Price Axis Sidebar: 66px wide
-    // - Bottom Time Axis Bar: 20px high
-    // - Main Price Chart Area: 82% of remaining height
-    // - Bottom Volume + CVD Orderflow Pane: 18% of remaining height
-    const double rightAxisW = 66.0;
+    const double rightAxisW = 68.0;
     const double bottomAxisH = 20.0;
     final double chartW = max(size.width - rightAxisW, 50.0);
     final double totalPlotH = max(size.height - bottomAxisH, 80.0);
@@ -384,7 +465,23 @@ class _DeltaExchangeProChartPainter extends CustomPainter {
     final double volPaneTop = pricePaneH;
     final double volPaneH = totalPlotH - pricePaneH;
 
-    // 1. Dynamic Y-Axis Auto-Scaling to Visible Candles (Delta Exchange Crispness!)
+    // Smart Vertical Collision Trackers so labels NEVER stack on top of each other!
+    final List<double> usedLeftY = [];
+    final List<double> usedMidRightY = [];
+    final List<double> usedAxisY = [];
+
+    double? reserveY(List<double> tracker, double targetY, {double minGap = 13.0, double minY = 6.0, double maxY = 9999.0}) {
+      final clamped = targetY.clamp(minY, min(maxY, pricePaneH - 14.0));
+      for (final existing in tracker) {
+        if ((existing - clamped).abs() < minGap) {
+          return null; // Skip or displace overlapping label
+        }
+      }
+      tracker.add(clamped);
+      return clamped;
+    }
+
+    // 1. Dynamic Y-Axis Auto-Scaling to Visible Candles
     double maxP = visible.map((c) => c.high).reduce(max);
     double minP = visible.map((c) => c.low).reduce(min);
 
@@ -392,18 +489,16 @@ class _DeltaExchangeProChartPainter extends CustomPainter {
       maxP = max(maxP, max(signal.tp3, signal.swingHighBsl));
       minP = min(minP, min(signal.stopLoss, signal.swingLowSsl));
     } else {
-      // Include nearby entry/TP1 so immediate trade setup is always clear without squishing candles
       maxP = max(maxP, max(signal.entry, signal.tp1));
       minP = min(minP, min(signal.entry, signal.stopLoss));
     }
 
     final double midP = (maxP + minP) / 2.0;
-    final double halfSpan = max((maxP - minP) / 2.0, signal.markPrice * 0.002) * (1.14 / verticalZoom);
+    final double halfSpan = max((maxP - minP) / 2.0, signal.markPrice * 0.002) * (1.15 / verticalZoom);
     maxP = midP + halfSpan;
     minP = midP - halfSpan;
     final double spanP = max(maxP - minP, 0.0000001);
 
-    // Reserve 5 future slots on the right when viewing the live edge (for Elliott Wave 5 & ABC projection)
     final bool atLiveEdge = endIdx >= allCandles.length;
     final int futureSlots = atLiveEdge ? 5 : 1;
     final double stepX = chartW / (visLen + futureSlots);
@@ -417,9 +512,9 @@ class _DeltaExchangeProChartPainter extends CustomPainter {
     final bool showOrderflow = viewMode == 'ALL' || viewMode == 'ORDERFLOW';
     final bool showAvwap = viewMode == 'ALL' || viewMode == 'CLEAN' || viewMode == 'ICT';
 
-    // 2. Draw Delta Exchange Grid & Axis Borders
+    // 2. Draw Grid & Axis Borders
     final gridPaint = Paint()..color = const Color(0xFF1A2232)..strokeWidth = 0.8;
-    const int priceSteps = 6;
+    const int priceSteps = 5;
     for (int i = 1; i < priceSteps; i++) {
       final y = pricePaneH * (i / priceSteps);
       _drawDashedLine(canvas, Offset(0, y), Offset(chartW, y), gridPaint, dashW: 3, spaceW: 3);
@@ -428,12 +523,11 @@ class _DeltaExchangeProChartPainter extends CustomPainter {
         canvas,
         tickPrice.toStringAsFixed(dec),
         Offset(chartW + 4, y - 6),
-        Colors.white54,
-        fontSize: 8.5,
+        Colors.white38,
+        fontSize: 8.0,
       );
     }
 
-    // Vertical time gridlines + Bottom Time Labels
     final int timeStep = max(1, (visLen / 5).round());
     for (int i = 0; i < visLen; i += timeStep) {
       final x = (i + 0.5) * stepX;
@@ -442,96 +536,127 @@ class _DeltaExchangeProChartPainter extends CustomPainter {
       if (ts > 0) {
         final dt = DateTime.fromMillisecondsSinceEpoch(ts * 1000);
         final tStr = DateFormat('HH:mm').format(dt);
-        _drawBadge(canvas, tStr, Offset(x - 14, totalPlotH + 4), Colors.white54, fontSize: 8.5);
+        _drawBadge(canvas, tStr, Offset(x - 14, totalPlotH + 4), Colors.white54, fontSize: 8.0);
       }
     }
 
-    // Axis Dividers
     final borderPaint = Paint()..color = const Color(0xFF253044)..strokeWidth = 1.0;
     canvas.drawLine(Offset(chartW, 0), Offset(chartW, totalPlotH), borderPaint);
     canvas.drawLine(Offset(0, pricePaneH), Offset(chartW, pricePaneH), borderPaint);
-    canvas.drawLine(Offset(0, totalPlotH), Offset( size.width, totalPlotH), borderPaint);
+    canvas.drawLine(Offset(0, totalPlotH), Offset(size.width, totalPlotH), borderPaint);
 
-    // 3. Draw Composite Volume Profile (CVP) Horizontal Histogram on Left Wall
+    // 3. Draw Composite Volume Profile (CVP) on Left Wall
     if (showOrderflow && signal.strategyExtras.volumeProfileBins.isNotEmpty) {
       final bins = signal.strategyExtras.volumeProfileBins;
       final binH = pricePaneH / bins.length;
       for (int b = 0; b < bins.length; b++) {
-        final w = bins[b] * (chartW * 0.26);
+        final w = bins[b] * (chartW * 0.22);
         final yTop = pricePaneH - ((b + 1) * binH);
         final isPocBin = b == (bins.length ~/ 2);
         final vpPaint = Paint()
-          ..color = (isPocBin ? Colors.amberAccent : Colors.cyanAccent).withOpacity(isPocBin ? 0.24 : 0.10);
+          ..color = (isPocBin ? Colors.amberAccent : Colors.cyanAccent).withOpacity(isPocBin ? 0.20 : 0.08);
         canvas.drawRect(Rect.fromLTWH(0, yTop, w, max(binH - 1, 1)), vpPaint);
       }
       final pocY = priceToY(signal.patternAnalysis.compositePoc);
-      _drawDashedLine(
-        canvas,
-        Offset(0, pocY),
-        Offset(chartW, pocY),
-        Paint()..color = Colors.amberAccent.withOpacity(0.75)..strokeWidth = 1.1,
-      );
-      _drawBadge(canvas, 'POC', Offset(4, pocY - 11), Colors.amberAccent, bg: true);
+      if (pocY > 12 && pocY < pricePaneH - 12) {
+        _drawDashedLine(
+          canvas,
+          Offset(0, pocY),
+          Offset(chartW, pocY),
+          Paint()..color = Colors.amberAccent.withOpacity(0.65)..strokeWidth = 1.0,
+        );
+        final ry = reserveY(usedLeftY, pocY - 10, minY: 42);
+        if (ry != null) {
+          _drawBadge(canvas, 'VP POC', Offset(4, ry), Colors.amberAccent, bg: true, fontSize: 7.5);
+        }
+      }
     }
 
-    // 3B. Draw Live Session Zones (Asian Range High/Low Box + True Day Session Open Line)
-    if (viewMode == 'ALL' || viewMode == 'ICT' || viewMode == 'CLEAN') {
-      final double ashY = priceToY(signal.strategyExtras.asianHigh);
-      final double aslY = priceToY(signal.strategyExtras.asianLow);
-      final double sessOpenY = priceToY(signal.strategyExtras.sessionOpenPrice);
-
-      // Shaded Asian Accumulation Range Box on left half of visible session
-      final Rect asianRect = Rect.fromLTRB(0, min(ashY, aslY), chartW * 0.45, max(ashY, aslY));
-      canvas.drawRect(asianRect, Paint()..color = Colors.blueAccent.withOpacity(0.06));
-      _drawDashedLine(
-        canvas,
-        Offset(0, ashY),
-        Offset(chartW * 0.65, ashY),
-        Paint()..color = Colors.lightBlueAccent.withOpacity(0.6)..strokeWidth = 1.0,
-      );
-      _drawDashedLine(
-        canvas,
-        Offset(0, aslY),
-        Offset(chartW * 0.65, aslY),
-        Paint()..color = Colors.lightBlueAccent.withOpacity(0.6)..strokeWidth = 1.0,
-      );
-      _drawBadge(canvas, 'ASIAN HIGH (ASH)', Offset(6, ashY - 11), Colors.lightBlueAccent, bg: true, fontSize: 8.0);
-      _drawBadge(canvas, 'ASIAN LOW (ASL)', Offset(6, aslY + 2), Colors.lightBlueAccent, bg: true, fontSize: 8.0);
-
-      // True Day / Session Open 00:00 UTC Line (Power of 3 AMD Pivot)
-      _drawDashedLine(
-        canvas,
-        Offset(0, sessOpenY),
-        Offset(chartW, sessOpenY),
-        Paint()..color = Colors.purpleAccent.withOpacity(0.65)..strokeWidth = 1.0,
-      );
-      _drawBadge(
-        canvas,
-        'SESSION OPEN (${signal.strategyExtras.po3Phase})',
-        Offset(chartW * 0.38, sessOpenY - 11),
-        Colors.purpleAccent,
-        bg: true,
-        fontSize: 8.0,
-      );
-    }
-
-    // 4. Draw ICT Order Blocks (+OB / -OB), Unicorn Setup, and BISI/SIBI FVGs
+    // 4. Draw CRT Reference Range Box (TOLAG CRT High, CRT Low, 50% Equilibrium, 70.5% OTE)
     if (showIct) {
-      for (final z in signal.zoneBoxes.take(4)) {
+      final double bslY = priceToY(signal.swingHighBsl);
+      final double sslY = priceToY(signal.swingLowSsl);
+      final double eqY = priceToY(signal.equilibrium);
+      final double oteY = priceToY(signal.otePrice);
+
+      // TOLAG CRT Reference Box outline on right 65% of chart
+      final double crtLeft = chartW * 0.32;
+      final Rect crtRect = Rect.fromLTRB(crtLeft, min(bslY, sslY), chartW, max(bslY, sslY));
+      canvas.drawRect(crtRect, Paint()..color = Colors.cyanAccent.withOpacity(0.03));
+      canvas.drawRect(
+        crtRect,
+        Paint()
+          ..color = Colors.cyanAccent.withOpacity(0.28)
+          ..strokeWidth = 0.9
+          ..style = PaintingStyle.stroke,
+      );
+
+      if (bslY > 8 && bslY < pricePaneH - 8) {
+        final ry = reserveY(usedMidRightY, bslY - 11);
+        if (ry != null) {
+          _drawBadge(canvas, 'CRT HIGH / BSL', Offset(crtLeft + 4, ry), const Color(0xFFFF5252), bg: true, fontSize: 7.5);
+        }
+      }
+      if (sslY > 8 && sslY < pricePaneH - 8) {
+        final ry = reserveY(usedMidRightY, sslY + 2);
+        if (ry != null) {
+          _drawBadge(canvas, 'CRT LOW / SSL', Offset(crtLeft + 4, ry), const Color(0xFF00E676), bg: true, fontSize: 7.5);
+        }
+      }
+      if (eqY > 10 && eqY < pricePaneH - 10) {
+        _drawDashedLine(
+          canvas,
+          Offset(crtLeft, eqY),
+          Offset(chartW, eqY),
+          Paint()..color = Colors.white38..strokeWidth = 0.9,
+        );
+        final ry = reserveY(usedMidRightY, eqY - 10);
+        if (ry != null) {
+          _drawBadge(canvas, 'EQ 50%', Offset(crtLeft + 4, ry), Colors.white70, bg: true, fontSize: 7.5);
+        }
+      }
+      if (oteY > 10 && oteY < pricePaneH - 10) {
+        final double oteBandPx = (pricePaneH * 0.03).clamp(5.0, 13.0);
+        canvas.drawRect(
+          Rect.fromLTRB(crtLeft, oteY - oteBandPx / 2, chartW, oteY + oteBandPx / 2),
+          Paint()..color = Colors.amberAccent.withOpacity(0.11),
+        );
+        final ry = reserveY(usedMidRightY, oteY - 10);
+        if (ry != null) {
+          _drawBadge(canvas, '🎯 70.5% OTE', Offset(crtLeft + 54, ry), Colors.amberAccent, bg: true, fontSize: 7.5);
+        }
+      }
+
+      // Draw Deduplicated ICT Zone Boxes (Max 3 Non-Overlapping Zones in Visible Range!)
+      // Labels are anchored cleanly on the right-inside edge of the zone so they NEVER stack on the left wall!
+      int drawnZones = 0;
+      for (final z in signal.zoneBoxes) {
+        if (drawnZones >= 3) break;
+        if (z.bottom > maxP || z.top < minP) continue;
         final topY = priceToY(z.top);
         final botY = priceToY(z.bottom);
+        final midY = (topY + botY) / 2.0;
+
+        // Check vertical collision before drawing zone label
+        final ry = reserveY(usedMidRightY, min(topY, botY) + 1, minGap: 14.0);
+        if (ry == null && drawnZones > 0) continue;
+
         final bool isUnicorn = z.type == 'UNICORN';
         final bool isBullZone = z.type.contains('BISI') || z.type.contains('BULL') || (isUnicorn && signal.direction == 'LONG');
         final Color zoneColor = isUnicorn
             ? Colors.amberAccent
             : (isBullZone ? const Color(0xFF00E676) : const Color(0xFFFF5252));
 
-        final double xStart = idxToX(z.startIndex).clamp(0.0, chartW * 0.75);
-        final rect = Rect.fromLTRB(xStart, min(topY, botY), chartW, max(topY, botY) + 3);
-        canvas.drawRect(rect, Paint()..color = zoneColor.withOpacity(isUnicorn ? 0.18 : 0.11));
-        canvas.drawLine(Offset(xStart, topY), Offset(chartW, topY), Paint()..color = zoneColor.withOpacity(0.55)..strokeWidth = 1.0);
-        canvas.drawLine(Offset(xStart, botY), Offset(chartW, botY), Paint()..color = zoneColor.withOpacity(0.55)..strokeWidth = 1.0);
-        _drawBadge(canvas, z.label, Offset(xStart + 4, min(topY, botY) + 2), zoneColor, bg: true);
+        final double xStart = idxToX(z.startIndex).clamp(chartW * 0.18, chartW * 0.72);
+        final rect = Rect.fromLTRB(xStart, min(topY, botY), chartW, max(max(topY, botY), min(topY, botY) + 4));
+        canvas.drawRect(rect, Paint()..color = zoneColor.withOpacity(isUnicorn ? 0.16 : 0.10));
+        canvas.drawLine(Offset(xStart, topY), Offset(chartW, topY), Paint()..color = zoneColor.withOpacity(0.5)..strokeWidth = 0.9);
+        canvas.drawLine(Offset(xStart, botY), Offset(chartW, botY), Paint()..color = zoneColor.withOpacity(0.5)..strokeWidth = 0.9);
+
+        if (ry != null) {
+          _drawBadge(canvas, z.label, Offset((chartW - 88).clamp(xStart + 4, chartW - 50), ry), zoneColor, bg: true, fontSize: 7.5);
+        }
+        drawnZones++;
       }
     }
 
@@ -572,22 +697,21 @@ class _DeltaExchangeProChartPainter extends CustomPainter {
       }
       if (started) {
         cloudPoly.close();
-        canvas.drawPath(cloudPoly, Paint()..color = spineColor.withOpacity(0.08));
+        canvas.drawPath(cloudPoly, Paint()..color = spineColor.withOpacity(0.07));
         canvas.drawPath(
           avwapPath,
           Paint()
             ..color = spineColor
-            ..strokeWidth = 1.8
+            ..strokeWidth = 1.6
             ..style = PaintingStyle.stroke,
         );
       }
     }
 
-    // Draw EMA 9 (Cyan thin) & EMA 21 (Amber thin) like Delta Exchange
     _drawLineSeries(canvas, signal.strategyExtras.ema9Series, startIdx, endIdx, idxToX, priceToY, Colors.cyanAccent.withOpacity(0.55), 1.1);
     _drawLineSeries(canvas, signal.strategyExtras.ema21Series, startIdx, endIdx, idxToX, priceToY, Colors.amber.withOpacity(0.55), 1.1);
 
-    // 6. Draw Crisp Delta Exchange Candlesticks + Bottom Volume & CVD Orderflow Bars
+    // 6. Draw Candlesticks + Volume & CVD Bars
     final double maxVol = max(visible.map((c) => c.volume).reduce(max), 1.0);
     final double candleBodyW = (stepX * 0.72).clamp(2.5, 18.0);
 
@@ -603,7 +727,6 @@ class _DeltaExchangeProChartPainter extends CustomPainter {
       final openY = priceToY(c.open);
       final closeY = priceToY(c.close);
 
-      // Sharp Wick
       canvas.drawLine(
         Offset(x, highY),
         Offset(x, lowY),
@@ -612,15 +735,15 @@ class _DeltaExchangeProChartPainter extends CustomPainter {
           ..strokeWidth = (stepX > 8 ? 1.4 : 1.0),
       );
 
-      // Crisp Candle Body
       final bodyTop = min(openY, closeY);
       final bodyBot = max(max(openY, closeY), bodyTop + 2.0);
-      final bodyRect = Rect.fromLTRB(x - candleBodyW / 2, bodyTop, x + candleBodyW / 2, bodyBot);
-      canvas.drawRect(bodyRect, Paint()..color = candleColor);
+      canvas.drawRect(
+        Rect.fromLTRB(x - candleBodyW / 2, bodyTop, x + candleBodyW / 2, bodyBot),
+        Paint()..color = candleColor,
+      );
 
-      // Bottom Volume & CVD Delta Bar
       final double vRatio = (c.volume / maxVol).clamp(0.05, 1.0);
-      final double barH = vRatio * (volPaneH * 0.82);
+      final double barH = vRatio * (volPaneH * 0.80);
       final double barTop = volPaneTop + volPaneH - barH;
       canvas.drawRect(
         Rect.fromLTRB(x - candleBodyW / 2, barTop, x + candleBodyW / 2, volPaneTop + volPaneH),
@@ -628,16 +751,16 @@ class _DeltaExchangeProChartPainter extends CustomPainter {
       );
     }
 
-    // Label CVD Pane
     _drawBadge(
       canvas,
-      signal.strategyExtras.hasCvdAbsorption ? 'CVD ORDERFLOW (ABSORPTION DETECTED ⚡)' : 'VOLUME & CVD DELTA',
+      signal.strategyExtras.hasCvdAbsorption ? 'CVD ORDERFLOW (ABSORPTION ⚡)' : 'VOLUME & CVD DELTA',
       Offset(6, volPaneTop + 3),
       signal.strategyExtras.hasCvdAbsorption ? const Color(0xFF00E676) : Colors.white54,
       bg: true,
+      fontSize: 7.5,
     );
 
-    // 7. Draw Geometric Chart Patterns (W-Bottom, M-Top, H&S, Wedges, Neckline, BOS/CHoCH)
+    // 7. Draw Spaced Geometric Chart Patterns & Elliott Waves (Anti-Crowding Filter)
     if (showPatterns) {
       for (final line in signal.patternAnalysis.patternLines) {
         if (line.role == 'CVP_POC') continue;
@@ -647,10 +770,10 @@ class _DeltaExchangeProChartPainter extends CustomPainter {
         final y2 = priceToY(line.endPrice);
 
         Color lineColor = Colors.purpleAccent;
-        double strokeW = 1.8;
+        double strokeW = 1.6;
         if (line.role == 'NECKLINE') {
           lineColor = Colors.amberAccent;
-          strokeW = 1.4;
+          strokeW = 1.3;
         } else if (line.role == 'UPPER_TREND' || line.role == 'LOWER_TREND') {
           lineColor = Colors.lightBlueAccent.withOpacity(0.85);
           strokeW = 1.3;
@@ -668,28 +791,32 @@ class _DeltaExchangeProChartPainter extends CustomPainter {
         }
       }
 
+      // Filter KeyPoints so badges are at least 26px apart horizontally
+      double lastKpX = -999.0;
       for (final kp in signal.patternAnalysis.patternKeyPoints) {
         if (kp.index < startIdx || kp.index >= endIdx) continue;
         final x = idxToX(kp.index);
+        if ((x - lastKpX).abs() < 26.0) continue;
+        lastKpX = x;
+
         final y = priceToY(kp.price);
         final kpColor = kp.tag.contains('BOS') || kp.tag.contains('CHoCH')
             ? Colors.cyanAccent
             : (kp.isBullish ? const Color(0xFF00E676) : const Color(0xFFFF5252));
 
-        canvas.drawCircle(Offset(x, y), 3.2, Paint()..color = kpColor);
-        final offsetY = kp.isBullish ? y + 4 : y - 14;
-        _drawBadge(canvas, kp.tag, Offset(x - 10, offsetY), kpColor, bg: true);
+        canvas.drawCircle(Offset(x, y), 3.0, Paint()..color = kpColor);
+        final offsetY = (kp.isBullish ? y + 4 : y - 14).clamp(6.0, pricePaneH - 14.0);
+        _drawBadge(canvas, kp.tag, Offset((x - 10).clamp(4.0, chartW - 36.0), offsetY), kpColor, bg: true, fontSize: 7.5);
       }
 
-      // Draw Elliott Wave (1)-(5) + (A)-(B)-(C)
       if (signal.patternAnalysis.waves.isNotEmpty) {
-        final wavePaint = Paint()..color = Colors.amberAccent..strokeWidth = 1.8..style = PaintingStyle.stroke;
-        final projPaint = Paint()..color = const Color(0xFF00E676)..strokeWidth = 1.8..style = PaintingStyle.stroke;
+        final wavePaint = Paint()..color = Colors.amberAccent..strokeWidth = 1.6..style = PaintingStyle.stroke;
+        final projPaint = Paint()..color = const Color(0xFF00E676)..strokeWidth = 1.6..style = PaintingStyle.stroke;
 
         Offset? prevPt;
         for (final w in signal.patternAnalysis.waves) {
           if (w.index < startIdx) continue;
-          final x = idxToX(w.index).clamp(4.0, chartW - 6.0);
+          final x = idxToX(w.index).clamp(6.0, chartW - 8.0);
           final y = priceToY(w.price);
           final pt = Offset(x, y);
 
@@ -702,36 +829,40 @@ class _DeltaExchangeProChartPainter extends CustomPainter {
           }
           prevPt = pt;
           final c = w.isProjected ? const Color(0xFF00E676) : Colors.amberAccent;
-          canvas.drawCircle(pt, 3.0, Paint()..color = c);
-          _drawBadge(canvas, w.label, Offset(x - 8, y - 13), c, bg: true);
+          canvas.drawCircle(pt, 2.8, Paint()..color = c);
+          _drawBadge(canvas, w.label, Offset((x - 8).clamp(4.0, chartW - 28.0), (y - 13).clamp(4.0, pricePaneH - 14.0)), c, bg: true, fontSize: 7.5);
         }
       }
     }
 
-    // 8. Draw Key Execution Levels & Right Axis Pills (MARK, ENTRY, TP1, TP3, SL)
-    _drawAxisTagLine(canvas, chartW, pricePaneH, priceToY(signal.tp3), 'TP3', const Color(0xFF00E676), dashed: true);
-    _drawAxisTagLine(canvas, chartW, pricePaneH, priceToY(signal.tp1), 'TP1', Colors.cyanAccent, dashed: true);
-    _drawAxisTagLine(canvas, chartW, pricePaneH, priceToY(signal.entry), 'ENTRY', Colors.white, dashed: false);
-    _drawAxisTagLine(canvas, chartW, pricePaneH, priceToY(signal.stopLoss), 'SL', const Color(0xFFFF3D57), dashed: true);
-
-    // Highlighted Live Mark Price Pill on Right Axis (Delta Exchange Signature Tag)
+    // 8. Draw Non-Overlapping Right Axis Execution Pills (MARK, ENTRY, TP1, TP2, TP3, SL)
+    // Reserve Mark Price Pill FIRST so it always takes priority
     final double markY = priceToY(signal.markPrice);
     final Color markColor = signal.direction == 'LONG' ? const Color(0xFF00C853) : const Color(0xFFFF3D57);
-    _drawDashedLine(canvas, Offset(0, markY), Offset(chartW, markY), Paint()..color = markColor.withOpacity(0.8)..strokeWidth = 1.0);
+    _drawDashedLine(canvas, Offset(0, markY), Offset(chartW, markY), Paint()..color = markColor.withOpacity(0.85)..strokeWidth = 1.0);
+    usedAxisY.add(markY);
+
+    _drawAxisTagLine(canvas, chartW, rightAxisW, pricePaneH, priceToY(signal.entry), 'ENTRY', Colors.white, usedAxisY, dashed: false);
+    _drawAxisTagLine(canvas, chartW, rightAxisW, pricePaneH, priceToY(signal.tp1), 'TP1', Colors.cyanAccent, usedAxisY, dashed: true);
+    _drawAxisTagLine(canvas, chartW, rightAxisW, pricePaneH, priceToY(signal.tp2), 'TP2', const Color(0xFF69F0AE), usedAxisY, dashed: true);
+    _drawAxisTagLine(canvas, chartW, rightAxisW, pricePaneH, priceToY(signal.tp3), 'TP3', const Color(0xFF00E676), usedAxisY, dashed: true);
+    _drawAxisTagLine(canvas, chartW, rightAxisW, pricePaneH, priceToY(signal.stopLoss), 'SL', const Color(0xFFFF3D57), usedAxisY, dashed: true);
+
+    // Draw Live Mark Price Pill on top
     final pillRect = RRect.fromRectAndRadius(
-      Rect.fromLTWH(chartW + 1, markY - 8, rightAxisW - 2, 16),
+      Rect.fromLTWH(chartW + 1, (markY - 8).clamp(2.0, pricePaneH - 16.0), rightAxisW - 2, 16),
       const Radius.circular(3),
     );
     canvas.drawRRect(pillRect, Paint()..color = markColor);
     _drawBadge(
       canvas,
       signal.markPrice.toStringAsFixed(dec),
-      Offset(chartW + 4, markY - 6),
+      Offset(chartW + 4, (markY - 6).clamp(4.0, pricePaneH - 14.0)),
       Colors.black,
       fontSize: 8.5,
     );
 
-    // 9. Precision Magnetic Crosshair with X/Y Coordinate Pills
+    // 9. Precision Magnetic Crosshair
     if (crosshairPos != null && crosshairPos!.dx <= chartW && crosshairPos!.dy <= totalPlotH) {
       final int snapLocalIdx = ((crosshairPos!.dx / stepX).floor()).clamp(0, visLen - 1);
       final double snapX = (snapLocalIdx + 0.5) * stepX;
@@ -802,20 +933,35 @@ class _DeltaExchangeProChartPainter extends CustomPainter {
   void _drawAxisTagLine(
     Canvas canvas,
     double chartW,
+    double rightAxisW,
     double pricePaneH,
     double y,
     String tag,
-    Color color, {
+    Color color,
+    List<double> usedAxisY, {
     bool dashed = true,
   }) {
     if (y < 6 || y > pricePaneH - 6) return;
-    final p = Paint()..color = color.withOpacity(0.65)..strokeWidth = 1.0;
+    final p = Paint()..color = color.withOpacity(0.60)..strokeWidth = 1.0;
     if (dashed) {
       _drawDashedLine(canvas, Offset(0, y), Offset(chartW, y), p);
     } else {
       canvas.drawLine(Offset(0, y), Offset(chartW, y), p);
     }
-    _drawBadge(canvas, tag, Offset(chartW + 4, y - 6), color, bg: true, fontSize: 8.0);
+
+    // Check right-axis collision so tags never overlap!
+    for (final existingY in usedAxisY) {
+      if ((existingY - y).abs() < 13.5) {
+        return; // Line is drawn, skip overlapping axis badge
+      }
+    }
+    usedAxisY.add(y);
+    final pill = RRect.fromRectAndRadius(
+      Rect.fromLTWH(chartW + 2, y - 7, rightAxisW - 4, 14),
+      const Radius.circular(3),
+    );
+    canvas.drawRRect(pill, Paint()..color = const Color(0xFF121A28));
+    _drawBadge(canvas, tag, Offset(chartW + 5, y - 5), color, bg: false, fontSize: 7.5);
   }
 
   void _drawDashedLine(Canvas canvas, Offset p1, Offset p2, Paint paint, {double dashW = 5.0, double spaceW = 3.5}) {
@@ -857,7 +1003,7 @@ class _DeltaExchangeProChartPainter extends CustomPainter {
       final rect = Rect.fromLTWH(pos.dx - 2, pos.dy - 1, tp.width + 4, tp.height + 2);
       canvas.drawRRect(
         RRect.fromRectAndRadius(rect, const Radius.circular(3)),
-        Paint()..color = const Color(0xFF0B0E14).withOpacity(0.85),
+        Paint()..color = const Color(0xFF0B0E14).withOpacity(0.88),
       );
     }
     tp.paint(canvas, pos);
@@ -867,7 +1013,7 @@ class _DeltaExchangeProChartPainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }
 
-/// Full-Screen Dedicated Delta Exchange Pro Chart Screen
+/// Full-Screen Dedicated Delta Exchange Pro Chart Screen with All-Timeframe Sniper Levels
 class IctChartScreen extends StatefulWidget {
   final IctSignal signal;
   final DeltaExchangeIctService? service;
@@ -923,6 +1069,31 @@ class _IctChartScreenState extends State<IctChartScreen> {
     if (mounted) setState(() => _loading = false);
   }
 
+  Widget _copyPill(String label, double val, int dec, Color color) {
+    return InkWell(
+      onTap: () {
+        Clipboard.setData(ClipboardData(text: val.toStringAsFixed(dec)));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Copied $label: ${val.toStringAsFixed(dec)}'), duration: const Duration(milliseconds: 500)),
+        );
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        decoration: BoxDecoration(
+          color: const Color(0xFF162032),
+          borderRadius: BorderRadius.circular(5),
+          border: Border.all(color: color.withOpacity(0.4)),
+        ),
+        child: Column(
+          children: [
+            Text(label, style: const TextStyle(fontSize: 8.0, color: Colors.white54, fontWeight: FontWeight.bold)),
+            Text(val.toStringAsFixed(dec), style: TextStyle(fontSize: 10.5, color: color, fontWeight: FontWeight.bold)),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final sig = _activeSignal;
@@ -933,21 +1104,24 @@ class _IctChartScreenState extends State<IctChartScreen> {
       backgroundColor: const Color(0xFF0A0E14),
       appBar: AppBar(
         backgroundColor: const Color(0xFF0F141F),
+        titleSpacing: 4,
         title: Row(
           children: [
-            Text('${sig.symbol} • ${_selectedTf.toUpperCase()}',
-                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
-            const SizedBox(width: 8),
+            Text(
+              '${sig.symbol} • ${_selectedTf.toUpperCase()}',
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(width: 6),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
               decoration: BoxDecoration(
                 color: isLong ? const Color(0xFF00E676).withOpacity(0.2) : const Color(0xFFFF5252).withOpacity(0.2),
-                borderRadius: BorderRadius.circular(6),
+                borderRadius: BorderRadius.circular(5),
               ),
               child: Text(
-                '${sig.direction} • ${sig.confluenceScore}%',
+                '${sig.direction} ${sig.confluenceScore}%',
                 style: TextStyle(
-                  fontSize: 11,
+                  fontSize: 10.5,
                   fontWeight: FontWeight.bold,
                   color: isLong ? const Color(0xFF00E676) : const Color(0xFFFF5252),
                 ),
@@ -956,19 +1130,19 @@ class _IctChartScreenState extends State<IctChartScreen> {
           ],
         ),
         actions: [
-          ...['5m', '15m', '1h', '4h'].map((tf) {
+          ...['5m', '15m', '1h', '4h', '1d'].map((tf) {
             final active = _selectedTf == tf;
             return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 11),
               child: InkWell(
                 onTap: () => _reloadTimeframe(tf),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
                   decoration: BoxDecoration(
                     color: active ? const Color(0xFF2979FF) : const Color(0xFF161F2E),
                     borderRadius: BorderRadius.circular(5),
                   ),
-                  child: Text(tf.toUpperCase(), style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                  child: Text(tf.toUpperCase(), style: const TextStyle(fontSize: 9.5, fontWeight: FontWeight.bold)),
                 ),
               ),
             );
@@ -978,56 +1152,37 @@ class _IctChartScreenState extends State<IctChartScreen> {
       ),
       body: Column(
         children: [
-          // Institutional Strategy Telemetry Banner
+          // Top Sniper Entry / SL / TP1 / TP2 / TP3 Strip + Pump/Dump Brief
           Container(
             width: double.infinity,
-            margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: const Color(0xFF131A26),
+              color: const Color(0xFF121A28),
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: Colors.cyanAccent.withOpacity(0.35)),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        '📐 FORMED: ${sig.patternAnalysis.formedPattern}',
-                        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF00E676)),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    Text(
-                      'PO3: ${sig.strategyExtras.po3Phase}',
-                      style: const TextStyle(fontSize: 9.5, fontWeight: FontWeight.bold, color: Colors.amberAccent),
-                    ),
-                  ],
+                Text(
+                  sig.reversalFlipBrief,
+                  style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white),
                 ),
-                const SizedBox(height: 3),
+                const SizedBox(height: 6),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Expanded(
-                      child: Text(
-                        '🚀 UPCOMING: ${sig.patternAnalysis.upcomingPattern}',
-                        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.cyanAccent),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    Text(
-                      sig.strategyExtras.squeezeSignal,
-                      style: const TextStyle(fontSize: 9.5, fontWeight: FontWeight.bold, color: Colors.purpleAccent),
-                    ),
+                    _copyPill('ENTRY', sig.entry, dec, Colors.white),
+                    _copyPill('STOP LOSS', sig.stopLoss, dec, const Color(0xFFFF3D57)),
+                    _copyPill('TP1 (1.1R)', sig.tp1, dec, Colors.cyanAccent),
+                    _copyPill('TP2 (2.2R)', sig.tp2, dec, const Color(0xFF69F0AE)),
+                    _copyPill('TP3 (WIDE)', sig.tp3, dec, const Color(0xFF00E676)),
                   ],
                 ),
               ],
             ),
           ),
-          // Interactive Zoomable & Pannable Delta Chart
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator(color: Color(0xFF00E676)))
@@ -1039,34 +1194,8 @@ class _IctChartScreenState extends State<IctChartScreen> {
                     ),
                   ),
           ),
-          // Bottom Live Execution Strip
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            color: const Color(0xFF101722),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                _metricCol('LIVE MARK', '\$${sig.markPrice.toStringAsFixed(dec)}', Colors.white),
-                _metricCol('CVP POC', '\$${sig.patternAnalysis.compositePoc.toStringAsFixed(dec)}', Colors.amberAccent),
-                _metricCol('AVWAP SPINE', '\$${sig.avwapState.currentAvwap.toStringAsFixed(dec)}', Colors.cyanAccent),
-                _metricCol('WAVE (5)', '\$${sig.patternAnalysis.targetProjection.toStringAsFixed(dec)}', const Color(0xFF00E676)),
-                _metricCol('WIDE TP3', '\$${sig.tp3.toStringAsFixed(dec)}', const Color(0xFF00E676)),
-              ],
-            ),
-          ),
         ],
       ),
-    );
-  }
-
-  Widget _metricCol(String label, String value, Color color) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label, style: const TextStyle(fontSize: 8, color: Colors.white54, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 2),
-        Text(value, style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.bold)),
-      ],
     );
   }
 }

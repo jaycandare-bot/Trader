@@ -1,7 +1,7 @@
 name: delta_ict_terminal_v18
 description: "Elite Delta Exchange ICT Sniper Terminal v10 with Live Session Engine, Killzone Countdown & Chart Session Overlays."
 publish_to: "none"
-version: 22.0.0+1
+version: 23.0.0+1
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
@@ -11,7 +11,7 @@ dependencies:
     sdk: flutter
   http: ^1.2.0
   shared_preferences: ^2.2.2
-  web_socket_channel: ^2.4.0
+  web_socket_channel: ^3.0.1
   intl: ^0.19.0
   crypto: ^3.0.3
 
