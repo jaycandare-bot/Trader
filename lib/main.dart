@@ -93,6 +93,8 @@ class TradeSignal {
   final double change24h;
   final bool isSmtStrong;
   final bool isPullback;
+  final int quadrant;
+  final String actionBrief;
   final DateTime signalTimeIst;
 
   TradeSignal({
@@ -109,6 +111,8 @@ class TradeSignal {
     required this.change24h,
     required this.isSmtStrong,
     required this.isPullback,
+    required this.quadrant,
+    required this.actionBrief,
     required this.signalTimeIst,
   });
 }
@@ -519,11 +523,22 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
       return null;
     }
 
-    if (_currentQuad == 3) {
-      if (direction == 'LONG' && !isSmtStrong && confidence < 86) return null;
-      if (direction == 'SHORT') confidence = math.min(96, confidence + 4);
+    // Generate concise actionable brief based on Quadrant state
+    String actionBrief = '';
+    if (_currentQuad == 1) {
+      actionBrief = direction == 'LONG'
+          ? 'QUAD 1: Hold Long for full TP (Alt Season active)'
+          : 'QUAD 1: Low short probability in Alt Season. Trim or Skip.';
     } else if (_currentQuad == 2) {
-      if (direction == 'LONG' && !isSmtStrong) confidence -= 4;
+      actionBrief = isSmtStrong
+          ? 'QUAD 2: SMT Strong. Hold Long, move SL to breakeven.'
+          : 'QUAD 2: Lagging alt in Selective SMT. Trim 50% or tighten SL.';
+    } else if (_currentQuad == 3) {
+      actionBrief = direction == 'SHORT'
+          ? 'QUAD 3: Alt Bleed Short active. Hold or scale down to TP.'
+          : 'QUAD 3: Danger for Longs! Trim 75% or exit on bounce.';
+    } else {
+      actionBrief = 'QUAD 4: Defensive rotation. Secure profits and cash out.';
     }
 
     confidence = confidence.clamp(75, 98);
@@ -551,6 +566,8 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
       change24h: change24h,
       isSmtStrong: isSmtStrong,
       isPullback: isPullback,
+      quadrant: _currentQuad,
+      actionBrief: actionBrief,
       signalTimeIst: istTime,
     );
   }
@@ -689,7 +706,6 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
     } catch (_) {}
   }
 
-  // Safe search & dropdown pool covering all fetched perpetual coins
   List<String> get _dropdownSymbolsList {
     final list = _allPerpSymbols.isNotEmpty ? _allPerpSymbols : _coreSymbols;
     if (_searchQuery.isEmpty) return list;
@@ -890,7 +906,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
                 child: TextField(
                   onChanged: (v) => setState(() => _searchQuery = v),
                   decoration: InputDecoration(
-                    hintText: 'Search coin across 150+ (e.g. SOLUSD)...',
+                    hintText: 'Search across 150+ perp coins...',
                     prefixIcon: const Icon(Icons.search, size: 18),
                     isDense: true,
                     filled: true,
@@ -932,7 +948,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
               const SizedBox(width: 8),
               _buildFilterChip('PULLBACKS', '🛡️ Pullbacks ($pullbackCount)'),
               const SizedBox(width: 8),
-              _buildFilterChip('SHORTS', '🔻 Quad 3 Shorts ($shortCount)'),
+              _buildFilterChip('SHORTS', '🔻 Shorts ($shortCount)'),
             ],
           ),
         ),
@@ -1003,28 +1019,40 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
                     decoration: BoxDecoration(color: dirColor.withOpacity(0.15), borderRadius: BorderRadius.circular(6)),
                     child: Text('${sig.direction} • ${sig.confidence}%', style: TextStyle(color: dirColor, fontWeight: FontWeight.bold, fontSize: 12)),
                   ),
-                  if (sig.isSmtStrong) ...[
-                    const SizedBox(width: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(color: Colors.amber.withOpacity(0.2), borderRadius: BorderRadius.circular(4)),
-                      child: const Text('SMT STRONG', style: TextStyle(color: Colors.amber, fontSize: 10, fontWeight: FontWeight.bold)),
-                    ),
-                  ],
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(color: Colors.amber.withOpacity(0.2), borderRadius: BorderRadius.circular(4)),
+                    child: Text('QUAD ${sig.quadrant}', style: const TextStyle(color: Colors.amber, fontSize: 10, fontWeight: FontWeight.bold)),
+                  ),
                   const Spacer(),
                   Text(timeStr, style: const TextStyle(fontSize: 11, color: Colors.white54)),
                 ],
               ),
               const SizedBox(height: 6),
-              Text('${sig.strategyName}  •  Pattern: ${sig.patternTag}', style: const TextStyle(fontSize: 12, color: Colors.white70)),
-              const Divider(height: 16, color: Colors.white12),
+              // Actionable Brief explaining what to do based on Quad shift
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1B2230),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  sig.actionBrief,
+                  style: const TextStyle(fontSize: 11, color: Color(0xFF40C4FF), fontWeight: FontWeight.w600),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text('${sig.strategyName}  •  Pattern: ${sig.patternTag}', style: const TextStyle(fontSize: 11, color: Colors.white70)),
+              const Divider(height: 14, color: Colors.white12),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  _buildPriceMetric('MARK ENTRY', sig.entry, Colors.white),
-                  _buildPriceMetric('STOP LOSS', sig.stopLoss, Colors.redAccent),
-                  _buildPriceMetric('TP 1 (1:2)', sig.tp1, const Color(0xFF00E676)),
-                  _buildPriceMetric('TP 2 (1:3.5)', sig.tp2, Colors.cyanAccent),
+                  _buildPriceMetric('ENTRY', sig.entry, Colors.white),
+                  _buildPriceMetric('SL', sig.stopLoss, Colors.redAccent),
+                  _buildPriceMetric('TP1', sig.tp1, const Color(0xFF00E676)),
+                  _buildPriceMetric('TP2', sig.tp2, Colors.cyanAccent),
                 ],
               ),
             ],
@@ -1049,7 +1077,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
   }
 
   // ==========================================================================
-  // LIVE DELTA MARK PRICE CHART TAB (SEARCHABLE & FULLY SYNCED)
+  // LIVE DELTA MARK PRICE CHART TAB
   // ==========================================================================
   Widget _buildLiveChartInspectorTab() {
     TradeSignal? activeSig;
