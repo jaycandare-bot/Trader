@@ -37,7 +37,7 @@ class DeltaInstitutionalTerminalApp extends StatelessWidget {
 // ============================================================================
 
 class Candle {
-  final int time; // Unix seconds
+  final int time;
   double open;
   double high;
   double low;
@@ -68,7 +68,7 @@ class Candle {
 class HtfZone {
   final double top;
   final double bottom;
-  final String label; // 1H Bull OB, 1H Bear OB, 1H BOS
+  final String label;
   final bool isBullish;
 
   HtfZone({
@@ -152,7 +152,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
   List<String> _allPerpSymbols = [];
   List<TradeSignal> _signals = [];
 
-  // Inspector / Live Chart State (with 1H HTF Overlays)
+  // Live Chart & Search State
   String _selectedChartSymbol = 'BTCUSD';
   String _selectedResolution = '15m';
   bool _useMarkPriceChart = true;
@@ -277,7 +277,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
 
         if (perpSymbols.isNotEmpty && mounted) {
           setState(() {
-            _allPerpSymbols = perpSymbols.take(160).toList();
+            _allPerpSymbols = perpSymbols.toList();
           });
           return;
         }
@@ -332,7 +332,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
 
       int greenAlts = 0;
       int totalCheckedAlts = 0;
-      for (final sym in _coreSymbols) {
+      for (final sym in targetList) {
         if (sym == 'BTCUSD') continue;
         final t = tickerMap[sym];
         if (t != null) {
@@ -392,7 +392,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
           });
         }
 
-        await Future.delayed(const Duration(milliseconds: 200));
+        await Future.delayed(const Duration(milliseconds: 150));
       }
     } finally {
       if (mounted) {
@@ -418,7 +418,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
       '$baseUrl/v2/history/candles?resolution=$resolution&symbol=$querySymbol&start=$startSec&end=$nowSec',
     );
 
-    final response = await http.get(uri).timeout(const Duration(seconds: 6));
+    final response = await http.get(uri).timeout(const Duration(seconds: 5));
     if (response.statusCode != 200) return [];
 
     final decoded = jsonDecode(response.body);
@@ -555,9 +555,6 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
     );
   }
 
-  // ==========================================================================
-  // LOAD LIVE CHART & 1H HTF ORDER BLOCKS / BOS
-  // ==========================================================================
   Future<void> _loadLiveChart(String symbol, String resolution) async {
     setState(() {
       _selectedChartSymbol = symbol;
@@ -572,7 +569,6 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
       candleCount: 120,
     );
 
-    // Fetch higher timeframe 1h candles for HTF OB & BOS Overlays
     final htf1h = await _fetchCandlesForSymbol(
       symbol: symbol,
       resolution: '1h',
@@ -580,7 +576,6 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
       candleCount: 50,
     );
 
-    // Compute 1H HTF Order Blocks and BOS
     final List<HtfZone> zones = _calculateHtfZones(htf1h);
 
     if (mounted) {
@@ -606,35 +601,16 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
       final prev = htfCandles[i - 1];
       final curr = htfCandles[i];
 
-      // Bullish OB: Last down candle before strong bullish expansion
       if (curr.close > curr.open && (curr.close - curr.open) > (prev.high - prev.low) * 1.2 && prev.close < prev.open) {
-        zones.add(HtfZone(
-          top: prev.high,
-          bottom: prev.low,
-          label: '1H Bull OB',
-          isBullish: true,
-        ));
+        zones.add(HtfZone(top: prev.high, bottom: prev.low, label: '1H Bull OB', isBullish: true));
       }
-
-      // Bearish OB: Last up candle before strong bearish breakdown
       if (curr.close < curr.open && (curr.open - curr.close) > (prev.high - prev.low) * 1.2 && prev.close > prev.open) {
-        zones.add(HtfZone(
-          top: prev.high,
-          bottom: prev.low,
-          label: '1H Bear OB',
-          isBullish: false,
-        ));
+        zones.add(HtfZone(top: prev.high, bottom: prev.low, label: '1H Bear OB', isBullish: false));
       }
     }
 
-    // Add 1H BOS (Break of Structure) line from recent significant 1h swing
     final double recent1hHigh = htfCandles.sublist(htfCandles.length - 12, htfCandles.length - 1).map((c) => c.high).reduce(math.max);
-    zones.add(HtfZone(
-      top: recent1hHigh,
-      bottom: recent1hHigh,
-      label: '1H BOS Level',
-      isBullish: true,
-    ));
+    zones.add(HtfZone(top: recent1hHigh, bottom: recent1hHigh, label: '1H BOS Level', isBullish: true));
 
     return zones;
   }
@@ -711,6 +687,13 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
         } catch (_) {}
       }, onError: (_) {});
     } catch (_) {}
+  }
+
+  // Safe search & dropdown pool covering all fetched perpetual coins
+  List<String> get _dropdownSymbolsList {
+    final list = _allPerpSymbols.isNotEmpty ? _allPerpSymbols : _coreSymbols;
+    if (_searchQuery.isEmpty) return list;
+    return list.where((s) => s.toUpperCase().contains(_searchQuery.toUpperCase())).toList();
   }
 
   List<TradeSignal> get _filteredSignals {
@@ -907,7 +890,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
                 child: TextField(
                   onChanged: (v) => setState(() => _searchQuery = v),
                   decoration: InputDecoration(
-                    hintText: 'Search coin (e.g. SOLUSD)...',
+                    hintText: 'Search coin across 150+ (e.g. SOLUSD)...',
                     prefixIcon: const Icon(Icons.search, size: 18),
                     isDense: true,
                     filled: true,
@@ -1066,7 +1049,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
   }
 
   // ==========================================================================
-  // LIVE DELTA MARK PRICE CHART TAB (WITH 1H OB & BOS OVERLAYS)
+  // LIVE DELTA MARK PRICE CHART TAB (SEARCHABLE & FULLY SYNCED)
   // ==========================================================================
   Widget _buildLiveChartInspectorTab() {
     TradeSignal? activeSig;
@@ -1077,6 +1060,11 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
       }
     }
 
+    final symbolDropdownOptions = _dropdownSymbolsList;
+    final currentDropdownVal = symbolDropdownOptions.contains(_selectedChartSymbol)
+        ? _selectedChartSymbol
+        : (symbolDropdownOptions.isNotEmpty ? symbolDropdownOptions.first : 'BTCUSD');
+
     return Column(
       children: [
         Container(
@@ -1084,18 +1072,21 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
           color: const Color(0xFF131822),
           child: Row(
             children: [
-              DropdownButton<String>(
-                value: _coreSymbols.contains(_selectedChartSymbol) ? _selectedChartSymbol : _coreSymbols.first,
-                dropdownColor: const Color(0xFF171E2C),
-                underline: const SizedBox(),
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.white),
-                items: _coreSymbols.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
-                onChanged: (val) {
-                  if (val != null) _loadLiveChart(val, _selectedResolution);
-                },
+              Expanded(
+                child: DropdownButton<String>(
+                  value: currentDropdownVal,
+                  isExpanded: true,
+                  dropdownColor: const Color(0xFF171E2C),
+                  underline: const SizedBox(),
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.white),
+                  items: symbolDropdownOptions.map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis))).toList(),
+                  onChanged: (val) {
+                    if (val != null) _loadLiveChart(val, _selectedResolution);
+                  },
+                ),
               ),
               const SizedBox(width: 8),
-              for (final tf in ['1m', '5m', '15m', '1h', '4h'])
+              for (final tf in ['15m', '1h', '4h'])
                 Padding(
                   padding: const EdgeInsets.only(right: 4),
                   child: InkWell(
@@ -1124,8 +1115,8 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
                     border: Border.all(color: _useMarkPriceChart ? Colors.amber : Colors.white24),
                   ),
                   child: Text(
-                    _useMarkPriceChart ? 'MARK PRICE' : 'LAST PRICE',
-                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: _useMarkPriceChart ? Colors.amber : Colors.white70),
+                    _useMarkPriceChart ? 'MARK' : 'LAST',
+                    style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: _useMarkPriceChart ? Colors.amber : Colors.white70),
                   ),
                 ),
               ),
@@ -1139,11 +1130,11 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
             children: [
               Text(
                 'Mark: \$${_liveMarkPrice > 100 ? _liveMarkPrice.toStringAsFixed(2) : _liveMarkPrice.toStringAsFixed(4)}',
-                style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 14),
+                style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 13),
               ),
-              const SizedBox(width: 14),
+              const Spacer(),
               const Text(
-                '⚡ 1H OB & BOS Overlays Active',
+                '⚡ 1H OB & BOS Active',
                 style: TextStyle(fontSize: 11, color: Color(0xFF40C4FF), fontWeight: FontWeight.bold),
               ),
             ],
@@ -1153,7 +1144,7 @@ class _TerminalHomeScreenState extends State<TerminalHomeScreen> {
           child: _isLoadingChart
               ? const Center(child: CircularProgressIndicator())
               : _chartCandles.isEmpty
-                  ? const Center(child: Text('No candle data available'))
+                  ? const Center(child: Text('No candle data available for this pair'))
                   : InteractiveDeltaChart(
                       candles: _chartCandles,
                       htfZones: _htfZones,
@@ -1267,7 +1258,6 @@ class DeltaLiveChartPainter extends CustomPainter {
 
     double priceToY(double p) => chartHeight - ((p - minPrice) / priceRange) * chartHeight;
 
-    // 1. Grid Lines
     final Paint gridPaint = Paint()
       ..color = Colors.white.withOpacity(0.06)
       ..strokeWidth = 1;
@@ -1288,7 +1278,6 @@ class DeltaLiveChartPainter extends CustomPainter {
     final double candleSlotWidth = chartWidth / visible.length;
     final double bodyWidth = (candleSlotWidth * 0.68).clamp(2.0, 14.0);
 
-    // 2. Render Higher-Timeframe 1H Order Block Zones & BOS Lines
     for (final zone in htfZones) {
       final double topY = priceToY(zone.top);
       final double botY = priceToY(zone.bottom);
@@ -1316,7 +1305,6 @@ class DeltaLiveChartPainter extends CustomPainter {
       }
     }
 
-    // 3. Draw Candlesticks
     for (int i = 0; i < visible.length; i++) {
       final c = visible[i];
       final bool isBull = c.close >= c.open;
@@ -1342,7 +1330,6 @@ class DeltaLiveChartPainter extends CustomPainter {
       );
     }
 
-    // 4. Draw Swing Structure Points (HH, HL, LH, LL)
     double? prevSwingHigh;
     double? prevSwingLow;
 
@@ -1373,14 +1360,12 @@ class DeltaLiveChartPainter extends CustomPainter {
       }
     }
 
-    // 5. Draw Strategy Lines
     if (activeSignal != null) {
       _drawHorizontalStrategyLine(canvas, chartWidth, priceToY(activeSignal!.entry), 'ENTRY ${activeSignal!.direction}', Colors.amber);
       _drawHorizontalStrategyLine(canvas, chartWidth, priceToY(activeSignal!.stopLoss), 'SL', Colors.redAccent);
       _drawHorizontalStrategyLine(canvas, chartWidth, priceToY(activeSignal!.tp1), 'TP1 (1:2)', const Color(0xFF00E676));
     }
 
-    // 6. Live Mark Price Line
     if (liveMarkPrice > 0) {
       final double markY = priceToY(liveMarkPrice).clamp(0.0, chartHeight);
       canvas.drawLine(
