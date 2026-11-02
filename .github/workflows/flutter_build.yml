@@ -88,3 +88,4 @@ jobs:
         with:
           name: Delta-ICT-Terminal-v23-APK
           path: build/app/outputs/flutter-apk/app-release.apk
+          
